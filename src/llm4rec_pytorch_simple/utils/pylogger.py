@@ -4,6 +4,11 @@ from typing import Optional
 
 from lightning_utilities.core.rank_zero import rank_prefixed_message, rank_zero_only
 
+# 配置基本的日志设置, 设置了日志级别为INFO，这样INFO及以上级别的日志都会被显示
+logging.basicConfig(
+    level=logging.INFO, format="[%(asctime)s][%(name)s][%(levelname)s]%(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+)
+
 
 class RankedLogger(logging.LoggerAdapter):
     """A multi-GPU-friendly python command line logger."""
@@ -39,6 +44,8 @@ class RankedLogger(logging.LoggerAdapter):
         if self.isEnabledFor(level):
             msg, kwargs = self.process(msg, kwargs)
             current_rank = getattr(rank_zero_only, "rank", None)
+
+            # 如果rank未设置，默认视为单GPU环境(rank=0)，确保日志能正常输出
             if current_rank is None:
                 error_msg = "The `rank_zero_only.rank` needs to be set before use"
                 raise RuntimeError(error_msg)

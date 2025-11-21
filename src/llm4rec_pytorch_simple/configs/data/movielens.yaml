@@ -1,0 +1,13 @@
+# _target_: llm4rec_pytorch_simple.data.mnist_datamodule.MNISTDataModule
+# data_dir: ${paths.data_dir}
+# batch_size: 128 # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
+# train_val_test_split: [55_000, 5_000, 10_000]
+# num_workers: 0
+# pin_memory: False
+
+
+data_preprocessor:
+  _target_: llm4rec_pytorch_simple.data.prepare_data.PrepareDataMovieLens
+  data_dir: ${paths.data_dir}
+
+split_mode: "global" # 数据集按时间划分方式： global 全局划分，user 基于用户的划分
