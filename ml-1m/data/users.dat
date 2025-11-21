@@ -1,4 +1,4 @@
-user_id::sex::occupation::zip_code
+user_id::sex::age::occupation::zip_code
 1::F::1::10::48067
 2::M::56::16::70072
 3::M::25::15::55117
