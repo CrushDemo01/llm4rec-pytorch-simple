@@ -10,6 +10,7 @@ import os
 
 os.sys.path.append("./src/llm4rec_pytorch_simple")
 # 从 hydra 配置中获取各种参数
+
 import hydra
 import pandas as pd
 from omegaconf import DictConfig, OmegaConf
@@ -20,11 +21,12 @@ logger = RankedLogger(__name__)
 
 
 class PrepareDataMovieLens:
-    def __init__(self, data_dir: str):
+    def __init__(self, data_dir: str, max_hash_ranges: dict):
         assert "ml-1m" in data_dir, "暂时只支持处理MovieLens 1M数据集"
         self.data_dir = os.path.abspath(data_dir)
-        self.processed_dir = os.path.abspath(os.path.join(self.data_dir, "../", "processed"))
+        self.processed_dir = os.path.abspath(os.path.join(self.data_dir, "../", "processed_2"))
         os.makedirs(self.processed_dir, exist_ok=True)  # 加载用户数据的辅助变量，供 create_sequential_data 使用
+        self.max_hash_ranges = max_hash_ranges
         self.users_info = None
         logger.info(f"原始目录：{self.data_dir}，输出目录：{self.processed_dir}")
 
@@ -128,7 +130,7 @@ class PrepareDataMovieLens:
         users = pd.read_csv(
             os.path.join(self.data_dir, "users.dat"),
             sep=r"::",
-            header=None,
+            header=0,
             engine="python",
             names=["user_id", "sex", "age_group", "occupation", "zip_code"],
         )
@@ -136,7 +138,7 @@ class PrepareDataMovieLens:
         movies = pd.read_csv(
             os.path.join(self.data_dir, "movies.dat"),
             sep=r"::",
-            header=None,
+            header=0,
             engine="python",
             names=["movie_id", "title", "genres"],
         )
@@ -144,15 +146,13 @@ class PrepareDataMovieLens:
         ratings = pd.read_csv(
             os.path.join(self.data_dir, "ratings.dat"),
             sep=r"::",
-            header=None,
+            header=0,
             engine="python",
             names=["user_id", "movie_id", "rating", "timestamp"],
         )
 
         # --- 2. 数据预处理 ---
-        # 提取年份和清理标题
-        movies["year"] = movies["title"].str.extract(r"\((\d{4})\)")
-        movies["clean_title"] = movies["title"].str.replace(r"\(\d{4}\)", "", regex=True).str.strip()
+        # 这里不处理movie的数据，而是在dataset 初始化的啥时候在处理movie的特征
 
         # 特征编码
         users["sex"] = pd.Categorical(users["sex"]).codes

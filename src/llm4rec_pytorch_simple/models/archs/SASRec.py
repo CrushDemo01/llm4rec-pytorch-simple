@@ -1,5 +1,7 @@
+import hydra
 import torch
 import torch.nn as nn
+from omegaconf import DictConfig
 
 from llm4rec_pytorch_simple.utils.pylogger import RankedLogger
 
@@ -48,7 +50,7 @@ class SASRec(nn.Module):
         """
         生成因果遮罩 (Upper Triangular Mask)。
         确保位置 i 只能看到 0...i 的信息，看不到 i+1 之后的信息。
-        mask,下三角矩阵为 1，上半部分为 0：
+        mask, 下三角矩阵为 1, 上半部分为 0:
         [[True,  False, False, False],   # 位置0只能看位置0
         [True,  True,  False, False],   # 位置1可以看位置0-1
         [True,  True,  True,  False],   # 位置2可以看位置0-2
@@ -98,29 +100,17 @@ class SASRec(nn.Module):
         return logits
 
 
-# ==========================================
-# 测试代码 (Demo)
-# ==========================================
-if __name__ == "__main__":
-    # 参数配置
-    NUM_ITEMS = 100  # 商品总数
-    MAX_LEN = 5  # 序列最大长度
-    HIDDEN_SIZE = 64  # 维度
-    BATCH_SIZE = 2
+@hydra.main(version_base="1.1", config_path="../../configs", config_name="train.yaml")
+def main(cfg: DictConfig):
+    model_cfg = cfg.model
+    print(model_cfg)
 
-    # 实例化模型
-    model = SASRec(
-        num_items=NUM_ITEMS,
-        max_len=MAX_LEN,
-        hidden_size=HIDDEN_SIZE,
-        num_blocks=2,  # 2层 Transformer
-        num_heads=2,  # 2个头
-        dropout=0.1,
-    )
+    model: SASRec = hydra.utils.instantiate(model_cfg.net)
 
     # 模拟输入数据 (Batch=2, Len=50)
     # 0 代表 padding
-    dummy_input = torch.randint(1, NUM_ITEMS, (BATCH_SIZE, MAX_LEN))
+    BATCH_SIZE = 2
+    dummy_input = torch.randint(1, model_cfg.net.num_items, (BATCH_SIZE, model_cfg.net.max_len))
     dummy_input[0, 40:] = 0  # 模拟第一个用户后面补零
 
     # 前向传播
@@ -132,3 +122,7 @@ if __name__ == "__main__":
     # 简单验证：取最后一个时间步的预测
     last_step_logits = logits[:, -1, :]
     print("last_step_logits:", last_step_logits, last_step_logits.shape)  # [2, 64]
+
+
+if __name__ == "__main__":
+    main()

@@ -5,9 +5,42 @@
 # num_workers: 0
 # pin_memory: False
 
-
-data_preprocessor:
+data_prepare:
   _target_: llm4rec_pytorch_simple.data.prepare_data.PrepareDataMovieLens
   data_dir: ${paths.data_dir}
 
+data_module:
+  _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataModule
+  max_hash_ranges:
+    genres: 63
+    title: 16383
+    year: 511
+  data_path: ${paths.data_dir}
+  max_jagged_dimension: 16
+  max_sequence_length: 200
+  chronological: True
+  batch_size: 4
+  sample_ratio: 1.0
+  num_workers: 1
+  prefetch_factor: 2
+
 split_mode: "global" # 数据集按时间划分方式： global 全局划分，user 基于用户的划分
+
+
+train_dataset:
+  _target_: llm4rec_pytorch_simple.data.rec_dataset.RecDataset
+  ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_global_train_data.csv"
+  ignore_last_n: 1
+  shift_id_by: 0
+
+val_dataset:
+  _target_: llm4rec_pytorch_simple.data.rec_dataset.RecDataset
+  ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_global_test_data.csv"
+  ignore_last_n: 1
+  shift_id_by: 0
+
+test_dataset:
+  _target_: llm4rec_pytorch_simple.data.rec_dataset.RecDataset
+  ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_global_test_data.csv"
+  ignore_last_n: 1
+  shift_id_by: 0
