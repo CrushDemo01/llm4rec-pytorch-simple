@@ -127,6 +127,26 @@ class PrepareDataMovieLens:
 
         return train_df, test_df
 
+    def _split_by_user_id(self, ratings_df):
+        """
+        方式三：按用户ID划分
+        将用户按ID排序，前80%的用户的所有交互作为训练集，后20%的用户的所有交互作为测试集。
+        优点：评估模型对新用户（冷启动）的泛化能力。
+        """
+        logger.info("执行按用户ID划分（User ID 前80% Train / 后20% Test）...")
+
+        user_ids = sorted(ratings_df["user_id"].unique())
+        total_users = len(user_ids)
+        split_idx = int(total_users * 0.8)
+
+        train_user_ids = set(user_ids[:split_idx])
+        test_user_ids = set(user_ids[split_idx:])
+
+        train_df = ratings_df[ratings_df["user_id"].isin(train_user_ids)]
+        test_df = ratings_df[ratings_df["user_id"].isin(test_user_ids)]
+
+        return train_df, test_df
+
     def _create_sequential_data(self, df, data_type):
         """
         辅助函数：将 Rating DataFrame 转换为 SASRec 需要的序列格式并保存
@@ -174,7 +194,7 @@ class PrepareDataMovieLens:
     def prepare(self, split_mode: str = "user"):
         """
         数据准备主入口
-        :param split_mode: 划分模式, "user" (用户级时间划分) 或 "global" (全局时间划分)
+        :param split_mode: 划分模式, "user" (用户级时间划分) 或 "global" (全局时间划分) 或 "user_id" (按用户ID划分)
         """
         assert "ml-1m" in self.data_dir, "只支持处理MovieLens 1M数据集"
         logger.info(
@@ -226,8 +246,10 @@ class PrepareDataMovieLens:
             train_df, test_df = self._split_by_user_temporal(ratings)
         elif split_mode == "global":
             train_df, test_df = self._split_by_global_temporal(ratings)
+        elif split_mode == "user_id":
+            train_df, test_df = self._split_by_user_id(ratings)
         else:
-            raise ValueError(f"不支持的划分模式: {split_mode}, 请使用 'user' 或 'global'")
+            raise ValueError(f"不支持的划分模式: {split_mode}, 请使用 'user', 'global' 或 'user_id'")
 
         logger.info(f"训练集大小：{len(train_df)}，测试集大小：{len(test_df)}")
 
@@ -252,6 +274,8 @@ def main(cfg: DictConfig):
     preprocessor.prepare(split_mode="user")
     # 方式二：新逻辑（全局时间划分）
     preprocessor.prepare(split_mode="global")
+    # 方式三：按用户ID划分
+    preprocessor.prepare(split_mode="user_id")
 
 
 if __name__ == "__main__":

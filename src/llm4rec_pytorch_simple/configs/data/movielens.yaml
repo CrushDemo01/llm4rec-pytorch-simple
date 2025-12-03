@@ -13,7 +13,7 @@ sample_ratio: 1.0
 num_workers: 8
 prefetch_factor: 4
 
-split_mode: "global" # 数据集按时间划分方式： global 全局划分，user 基于用户的划分
+split_mode: "user_id" # 数据集按时间划分方式： global 全局划分，user 基于用户的划分，user_id 基于用户ID的划分
 
 data_prepare:
   _target_: llm4rec_pytorch_simple.data.prepare_data.PrepareDataMovieLens
@@ -22,15 +22,15 @@ data_prepare:
 
 train_dataset:
   _target_: llm4rec_pytorch_simple.data.rec_dataset.RecDataset
-  ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_global_train_data.csv"
+  ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_train_data.csv"
   ignore_last_n: 1  # 训练集:最后1个作为目标，这样那output就要是1
 
 val_dataset:
   _target_: llm4rec_pytorch_simple.data.rec_dataset.RecDataset
-  ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_global_test_data.csv"
+  ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_test_data.csv"
   ignore_last_n: 1  # 验证集:最后1个作为目标(用于调参)
 
 test_dataset:
   _target_: llm4rec_pytorch_simple.data.rec_dataset.RecDataset
-  ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_global_test_data.csv"
+  ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_test_data.csv"
   ignore_last_n: 0
