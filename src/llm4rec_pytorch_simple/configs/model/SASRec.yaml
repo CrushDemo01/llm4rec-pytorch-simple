@@ -8,7 +8,7 @@ _num_items: ${data.num_items}              # 物品总数 (3883 部电影 + 1 fo
 _max_sequence_len: ${data.max_sequence_length}         # 最大序列长度 (199 历史 + 1 输出)
 
 # 模型架构相关
-_embedding_dim: 16             # 嵌入维度
+_embedding_dim: 40             # 嵌入维度
 _dropout: 0.1                  # Dropout 比率
 
 # ========================================

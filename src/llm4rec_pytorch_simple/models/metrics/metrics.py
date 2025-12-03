@@ -21,8 +21,10 @@ class RetrievalMetrics:
             at_k_list (list): 需要计算具体指标的 K 值列表 (e.g. [5, 10])
                               如果不填，默认只计算 @k
         """
-        self.topk = topk
         self.at_k_list = at_k_list if at_k_list else [topk]
+        # 确保 topk 足够大以覆盖 at_k_list 中的最大值
+        # 如果 topk < max(at_k_list)，则检索时无法判断是否命中较大的 k
+        self.topk = max(topk, max(self.at_k_list))
 
         # 内部状态：用于暂存每个 batch 的数据
         self.preds_buffer = []

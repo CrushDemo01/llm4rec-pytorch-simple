@@ -142,7 +142,7 @@ class RetrievalModule(GenerativeRecommenders):
                 prog_bar=True,  # ✅ 显示在进度条
                 logger=True,  # ✅ 发送到CSV和TensorBoard
             )
-            logger.info("val results: " + results)
+            logger.info(f"val results: {results}")
             self.metrics.reset()
 
     def test_step(self, batch: tuple[torch.Tensor], batch_idx: int):

@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from pathlib import Path
-
+from lightning.pytorch.callbacks import RichProgressBar
 import rich
 import rich.syntax
 import rich.tree
@@ -8,6 +8,7 @@ from hydra.core.hydra_config import HydraConfig
 from lightning_utilities.core.rank_zero import rank_zero_only
 from omegaconf import DictConfig, OmegaConf, open_dict
 from rich.prompt import Prompt
+from rich.table import Table
 
 from llm4rec_pytorch_simple.utils import pylogger
 
@@ -98,3 +99,60 @@ def enforce_tags(cfg: DictConfig, save_to_file: bool = False) -> None:
     if save_to_file:
         with open(Path(cfg.paths.output_dir, "tags.log"), "w") as file:
             rich.print(cfg.tags, file=file)
+
+
+class CustomRichProgressBar(RichProgressBar):
+    """自定义 RichProgressBar，以表格形式显示验证指标。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.val_metrics = {}
+
+    def get_metrics(self, trainer, pl_module):
+        # 获取所有指标
+        items = super().get_metrics(trainer, pl_module)
+        # 在验证阶段结束时，以表格形式打印指标
+        if "val/hr@10" in items and trainer.state.stage == "validate":
+            self.val_metrics.update(items)
+            # 清除进度条中的验证指标，避免重复显示
+            for key in list(items):
+                if key.startswith("val/"):
+                    items.pop(key)
+        return items
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        super().on_validation_epoch_end(trainer, pl_module)
+        if not self.val_metrics:
+            return
+
+        # 创建表格
+        table = Table(show_header=True, header_style="bold magenta")
+        
+        # 收集数据
+        row_data = []
+        headers = []
+        
+        for k, v in sorted(self.val_metrics.items()):
+            if k.startswith("val/"):
+                headers.append(k)
+                # 尝试将Tensor转换为浮点数
+                if hasattr(v, "item"):
+                    v = v.item()
+                row_data.append(f"{v:.4f}")
+        
+        # 添加列
+        for header in headers:
+            table.add_column(header, justify="center")
+            
+        # 添加数据行
+        if row_data:
+            table.add_row(*row_data)
+
+        # 打印表格
+        # RichProgressBar 内部使用 self._console 或 self.progress.console
+        # 但为了安全起见，我们可以直接使用 rich.print 或者 trainer.console (如果存在)
+        # 这里我们使用 rich.print，因为它最通用
+        rich.print(table)
+        
+        # 清空缓存的指标
+        self.val_metrics.clear()
