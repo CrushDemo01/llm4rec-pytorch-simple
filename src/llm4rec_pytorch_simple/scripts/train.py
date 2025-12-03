@@ -35,10 +35,16 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         L.seed_everything(cfg.seed, workers=True)
 
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
-    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
+
+    kwargs = {
+        "train_dataset": cfg.data.train_dataset,
+        "val_dataset": cfg.data.val_dataset,
+        "test_dataset": cfg.data.test_dataset,
+    }
+    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data, **kwargs, _recursive_=False)
 
     log.info(f"Instantiating model <{cfg.model._target_}>")
-    model: LightningModule = hydra.utils.instantiate(cfg.model)
+    model: LightningModule = hydra.utils.instantiate(cfg.model, _recursive_=False)
 
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))

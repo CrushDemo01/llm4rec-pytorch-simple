@@ -6,6 +6,7 @@ class LocalNegativeSamples(torch.nn.Module):
         super().__init__()
         self.name = "LocalNegativeSamples"
         self.num_items = num_items
+        self._item_emb: torch.nn.Embedding = None
 
     def forward(self, positive_ids: torch.Tensor, num_to_sample: int) -> torch.Tensor:
         """
@@ -42,7 +43,7 @@ class LocalNegativeSamples(torch.nn.Module):
             fixed[fixed == 0] = 1
             neg_ids[mask] = fixed
 
-        return neg_ids
+        return neg_ids, self._item_emb(neg_ids)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 
 
@@ -12,7 +14,7 @@ class RetrievalMetrics:
     - 修正了 MRR 在未命中时的计算逻辑
     """
 
-    def __init__(self, topk: int, at_k_list: list[int] = None):
+    def __init__(self, topk: int, at_k_list: Optional[list[int]] = None):
         """
         Args:
             topk (int): 截断长度 (Top-K)

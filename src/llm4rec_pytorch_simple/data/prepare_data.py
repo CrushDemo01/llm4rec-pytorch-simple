@@ -3,13 +3,15 @@
 参考https://raw.githubusercontent.com/kang205/SASRec的格式
 例如：
 index,user_id,sequence_item_ids,sequence_ratings,sequence_timestamps,sex,age_group,occupation,zip_code
-0,1,"3186,1721,1270,1022,2340,1836,3408,1207,2804,260,720,1193,919,608,2692,1961,2028,3105,938,1035,1962,1028,2018,150,1097,914,1287,2797,1246,2762,661,2918,531,3114,2791,1029,2321,1197,594,2398,1545,527,745,595,588,1,2687,783,2294,2355,1907,1566,48","4,4,5,5,3,5,4,4,5,4,3,5,4,4,4,5,5,5,4,5,4,5,4,5,4,3,5,4,4,4,3,4,4,4,4,5,3,3,4,4,4,5,3,5,4,5,3,4,4,5,4,4,5","978300019,978300055,978300055,978300055,978300103,978300172,978300275,978300719,978300719,978300760,978300760,978300760,978301368,978301398,978301570,978301590,978301619,978301713,978301752,978301753,978301753,978301777,978301777,978301777,978301953,978301968,978302039,978302039,978302091,978302091,978302109,978302124,978302149,978302174,978302188,978302205,978302205,978302268,978302268,978302281,978824139,978824195,978824268,978824268,978824268,978824268,978824268,978824291,978824291,978824291,978824330,978824330,978824351",0,0,10,1588
+0,1,1193:661:914:3408:2355:1197:1287:2804:594:919,5:3:3:4:5:3:5:5:4:4,978300760:978302109:978301968:978300275:978824291:978302268:978302039:978300719:978302268:978301368,F,1,10,48067
 """
 
 import os
 
 os.sys.path.append("./src/llm4rec_pytorch_simple")
 # 从 hydra 配置中获取各种参数
+
+import json
 
 import hydra
 import pandas as pd
@@ -21,14 +23,53 @@ logger = RankedLogger(__name__)
 
 
 class PrepareDataMovieLens:
-    def __init__(self, data_dir: str, max_hash_ranges: dict):
+    def __init__(self, data_dir: str, max_hash_ranges: dict, **kwargs):
         assert "ml-1m" in data_dir, "暂时只支持处理MovieLens 1M数据集"
         self.data_dir = os.path.abspath(data_dir)
-        self.processed_dir = os.path.abspath(os.path.join(self.data_dir, "../", "processed_2"))
-        os.makedirs(self.processed_dir, exist_ok=True)  # 加载用户数据的辅助变量，供 create_sequential_data 使用
+        self.processed_dir = os.path.abspath(os.path.join(self.data_dir, "../", "processed"))
+        os.makedirs(self.processed_dir, exist_ok=True)
         self.max_hash_ranges = max_hash_ranges
         self.users_info = None
+
+        # 创建 movie_id 到连续索引的映射
+        self.movie_id_mapping, self.idx_to_movie_id = self._create_movie_id_mapping()
         logger.info(f"原始目录：{self.data_dir}，输出目录：{self.processed_dir}")
+        logger.info(f"Movie ID 映射创建完成: {len(self.movie_id_mapping)} 部电影")
+
+    def _create_movie_id_mapping(self):
+        """
+        创建 movie_id 到连续索引的映射
+        返回: (movie_id -> index, index -> movie_id)
+        """
+        movies_file = os.path.join(self.data_dir, "movies.dat")
+        movies = pd.read_csv(movies_file, sep="::", header=0, engine="python", names=["movie_id", "title", "genres"])
+
+        # 获取所有唯一的 movie_id 并排序
+        unique_movie_ids = sorted(movies["movie_id"].unique())
+
+        # 创建映射: movie_id -> sequential_index (从 1 开始,0 保留给 padding)
+        movie_id_to_idx = {int(movie_id): idx + 1 for idx, movie_id in enumerate(unique_movie_ids)}
+        idx_to_movie_id = {idx + 1: int(movie_id) for idx, movie_id in enumerate(unique_movie_ids)}
+
+        # 保存映射文件
+        mapping_file = os.path.join(self.processed_dir, "movie_id_mapping.json")
+        with open(mapping_file, "w") as f:
+            json.dump(
+                {
+                    "movie_id_to_idx": {str(k): v for k, v in movie_id_to_idx.items()},  # 键转为字符串
+                    "idx_to_movie_id": {str(k): v for k, v in idx_to_movie_id.items()},  # 键转为字符串
+                    "num_movies": len(unique_movie_ids),
+                    "max_original_id": int(max(unique_movie_ids)),
+                    "max_mapped_idx": len(unique_movie_ids),
+                },
+                f,
+                indent=2,
+            )
+
+        logger.info(f"Movie ID 映射已保存到: {mapping_file}")
+        logger.info(f"原始 movie_id 范围: 1-{max(unique_movie_ids)}, 映射后索引范围: 1-{len(unique_movie_ids)}")
+
+        return movie_id_to_idx, idx_to_movie_id
 
     def _split_by_user_temporal(self, ratings_df):
         """
@@ -45,7 +86,7 @@ class PrepareDataMovieLens:
         # sort_values 在外层做一次比在循环里做效率略高
         sorted_ratings = ratings_df.sort_values(by=["user_id", "timestamp"])
 
-        for user_id, user_ratings in sorted_ratings.groupby("user_id"):
+        for _user_id, user_ratings in sorted_ratings.groupby("user_id"):
             user_ratings_list = user_ratings.values.tolist()
             total_interactions = len(user_ratings_list)
 
@@ -89,10 +130,23 @@ class PrepareDataMovieLens:
     def _create_sequential_data(self, df, data_type):
         """
         辅助函数：将 Rating DataFrame 转换为 SASRec 需要的序列格式并保存
+        应用 movie_id 映射,将原始 movie_id 转换为连续索引
         """
         if df.empty:
             logger.warning(f"{data_type} 数据集为空，跳过生成序列文件。")
             return
+
+        # 应用 movie_id 映射
+        df["movie_id"] = df["movie_id"].map(self.movie_id_mapping)
+
+        # 检查是否有未映射的 movie_id
+        if df["movie_id"].isna().any():
+            unmapped_count = df["movie_id"].isna().sum()
+            logger.warning(f"发现 {unmapped_count} 个未映射的 movie_id,将被过滤掉")
+            df = df.dropna(subset=["movie_id"])
+
+        # 转换为整数
+        df["movie_id"] = df["movie_id"].astype(int)
 
         # 按时间戳排序并按用户分组
         df_grouped = df.sort_values(by=["timestamp"]).groupby("user_id")
@@ -190,9 +244,9 @@ def main(cfg: DictConfig):
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
 
-    logger.info(f"{OmegaConf.to_yaml(cfg.data.data_preprocessor)}")
+    logger.info(f"{OmegaConf.to_yaml(cfg.data.data_prepare)}")
     # logger.info(f"Instantiating datamodule <{cfg.data._target_}>")
-    preprocessor: PrepareDataMovieLens = hydra.utils.instantiate(cfg.data.data_preprocessor)
+    preprocessor: PrepareDataMovieLens = hydra.utils.instantiate(cfg.data.data_prepare)
 
     # 方式一：原有逻辑（用户内划分）
     preprocessor.prepare(split_mode="user")

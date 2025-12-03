@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional, Tuple
+from typing import Optional
 
 import hydra
 import lightning as L
@@ -25,8 +25,8 @@ def eval_int_list(
     target_len: int,
     ignore_last_n: int,
     shift_id_by: int,
-    sampling_kept_mask: Optional[List[bool]] = None,
-) -> Tuple[List[int], int]:
+    sampling_kept_mask: Optional[list[bool]] = None,
+) -> tuple[list[int], int]:
     """
     处理整数列表，包括忽略元素、ID偏移、采样和序列反转
 
@@ -50,7 +50,7 @@ def eval_int_list(
     return y, y_len
 
 
-def truncate_or_pad_seq(y: List[int], target_len: int, chronological: bool) -> List[int]:
+def truncate_or_pad_seq(y: list[int], target_len: int, chronological: bool) -> list[int]:
     """
     截断或填充序列到目标长度
 
@@ -87,6 +87,7 @@ class RecDataset(Dataset):
         shift_id_by: int = 0,
         chronological: bool = False,
         sample_ratio: float = 1.0,
+        **kwargs,
     ):
         """
         参数:
@@ -106,7 +107,7 @@ class RecDataset(Dataset):
         self.shift_id_by = shift_id_by
         self.chronological = chronological
         self.sample_ratio = sample_ratio
-        self._cache = dict()  # 缓存已处理的样本，提高重复访问效率
+        self._cache = {}  # 缓存已处理的样本，提高重复访问效率
 
     def __len__(self):
         return len(self.ratings_frame)
@@ -165,6 +166,22 @@ class RecDataset(Dataset):
             f"history len {movie_history_len} differs from ratings len {ratings_len}."
         )
 
+        # 检查历史记录是否为空 (某些用户历史记录太短,经过 ignore_last_n 后可能为空)
+        if movie_history_len == 0:
+            # 返回一个填充的默认样本,避免训练时崩溃
+            # 这些样本会被 padding_mask 过滤掉,不会影响训练
+            max_seq_len = self.padding_length - 1
+            return {
+                "user_id": data["user_id"],
+                "historical_ids": torch.zeros(max_seq_len, dtype=torch.int64),
+                "historical_ratings": torch.zeros(max_seq_len, dtype=torch.int64),
+                "historical_timestamps": torch.zeros(max_seq_len, dtype=torch.int64),
+                "history_lengths": 0,
+                "target_ids": 0,
+                "target_ratings": 0,
+                "target_timestamps": 0,
+            }
+
         # 分离历史序列和目标(预测目标)
         # 第一个元素(最新的交互)作为目标，其余作为历史
         historical_ids = movie_history[1:]
@@ -220,7 +237,7 @@ class RecoDataModule(L.LightningDataModule):
         train_dataset: DictConfig = None,
         val_dataset: DictConfig = None,
         test_dataset: DictConfig = None,
-        max_hash_ranges: dict = {"genres": 63, "title": 16383, "year": 511},
+        max_hash_ranges: Optional[dict] = None,
         data_path: str = "ml-1m/data",
         max_jagged_dimension: int = 16,
         max_sequence_length: int = 200,
@@ -229,7 +246,10 @@ class RecoDataModule(L.LightningDataModule):
         sample_ratio: float = 1.0,
         num_workers: int = os.cpu_count() // 4,
         prefetch_factor: int = 4,
+        **kwargs,
     ):
+        if max_hash_ranges is None:
+            max_hash_ranges = {"genres": 63, "title": 16383, "year": 511}
         super().__init__()
         self.data_path = data_path
         self.train_dataset = train_dataset
@@ -297,7 +317,7 @@ class RecoDataModule(L.LightningDataModule):
     def setup(self, stage: str = "test"):
         logger.info(f"Setting up dataset for stage: {stage}")
         """
-        设置数据集，根据训练、验证或测试阶段加载数据
+        设置数据集，根据训练、验证或测试阶段加载数据，在fit, test, predict 等都会自动调用
         """
         kwargs = {
             "max_sequence_length": self.max_sequence_length,

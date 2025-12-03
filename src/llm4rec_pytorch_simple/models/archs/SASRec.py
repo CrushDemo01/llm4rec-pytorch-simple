@@ -9,44 +9,48 @@ logger = RankedLogger(__name__)
 
 
 class SASRec(nn.Module):
-    def __init__(self, num_items, max_len, hidden_size, num_blocks, num_heads, dropout=0.1):
+    """
+    Implements SASRec (Self-Attentive Sequential Recommendation, https://arxiv.org/abs/1808.09781, ICDM'18).
+    """
+
+    def __init__(
+        self,
+        max_sequence_len: int,  # 输入序列的最大长度
+        embedding_dim: int,  # embedding的维度
+        num_blocks: int,  # transformer的block数
+        num_heads: int,  # transformer的head数
+        ffn_hidden_extend: int,  # transformer的ffn hidden dim
+        ffn_activation_fn: str = "gelu",  # transformer的ffn activation fn
+        dropout: float = 0.1,
+    ):
         super().__init__()
+        # 1. 模型中不用embedding，而是有embedding类处理，这样可以给不同模型都使用。
 
-        self.max_len = max_len
-        self.num_items = num_items
-        self.hidden_size = hidden_size
-
-        # 1. Embeddings
-        # item_emb: [num_items + 1, hidden_size], +1 是为了留给 padding (index=0)
-        self.item_emb = nn.Embedding(num_items + 1, hidden_size, padding_idx=0)
-        self.pos_emb = nn.Embedding(max_len, hidden_size)
-        self.emb_dropout = nn.Dropout(dropout)
+        self.max_sequence_len = max_sequence_len
+        self.embedding_dim = embedding_dim
 
         # 2. Transformer Encoder (核心骨干)
         # 使用 PyTorch 官方实现，包含 MultiheadAttention + FFN + LayerNorm
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_size,
+            d_model=embedding_dim,
             nhead=num_heads,
-            dim_feedforward=hidden_size * 4,
+            dim_feedforward=ffn_hidden_extend * embedding_dim,
+            activation=ffn_activation_fn,
             dropout=dropout,
             batch_first=True,  # 输入维度是 (Batch, Seq_Len, Dim)
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_blocks)
 
         # 3. Final Norm
-        self.layer_norm = nn.LayerNorm(hidden_size)
+        self.layer_norm = nn.LayerNorm(embedding_dim)
+
+        # attention mask
+        self.__init_att_mask()
 
         # 初始化参数 (Xavier)
         self.apply(self._init_weights)
 
-    def _init_weights(self, module):
-        if isinstance(module, (nn.Linear, nn.Embedding)):
-            module.weight.data.normal_(mean=0.0, std=0.02)
-        elif isinstance(module, nn.LayerNorm):
-            module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
-
-    def get_causal_mask(self, seq_len, device):
+    def __init_att_mask(self):
         """
         生成因果遮罩 (Upper Triangular Mask)。
         确保位置 i 只能看到 0...i 的信息，看不到 i+1 之后的信息。
@@ -56,48 +60,51 @@ class SASRec(nn.Module):
         [True,  True,  True,  False],   # 位置2可以看位置0-2
         [True,  True,  True,  True]]    # 位置3可以看位置0-3
         """
-        mask = torch.tril(torch.ones(seq_len, seq_len, device=device)) == 1
+        # 先创建张量，再调用 tril()，避免旧版 PyTorch 不支持 dtype 参数
+        mask = torch.ones(self.max_sequence_len, self.max_sequence_len)
+        mask = torch.tril(mask)  # 下三角矩阵
         mask = mask.float().masked_fill(mask == 0, float("-inf")).masked_fill(mask == 1, 0.0)
-        return mask
+        self.register_buffer("causal_mask", mask)
 
-    def forward(self, input_ids):
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
+    def forward(self, user_embeddings: torch.Tensor, past_ids: torch.Tensor):
         """
         Args:
-            input_ids: (Batch, Seq_Len) 用户历史行为序列 ID
+            user_embeddings: (Batch, Seq_Len, Dim) 经过位置编码后的用户嵌入
+            past_ids: (Batch, Seq_Len) 用户历史行为序列 ID (用于生成 padding mask)
         Returns:
-            logits: (Batch, Seq_Len, Num_Items + 1) 预测分数
+            output: (Batch, Seq_Len, Dim) Transformer 编码后的序列表示
         """
-        seq_len = input_ids.size(1)
-        device = input_ids.device
+        _B, N, _D = user_embeddings.shape
 
-        # 1. 生成 Embedding
-        # Positions: [0, 1, 2, ..., seq_len-1]
-        positions = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0)
+        # 1. 生成因果掩码 (防止看到未来信息)
+        # 从预先计算的 buffer 中切片取出当前序列长度的掩码
+        causal_mask = self.causal_mask[:N, :N]  # 切片到实际序列长度 [N, N]
 
-        # Input Embedding = Item Embedding + Positional Embedding
-        x = self.item_emb(input_ids) + self.pos_emb(positions)
-        x = self.emb_dropout(x)
+        # 2. 生成填充掩码 (屏蔽 padding 位置)
+        # True 表示该位置是 padding，需要被屏蔽
+        padding_mask = past_ids == 0  # [B, N]
 
-        # 2. 生成 Mask 并通过 Transformer
-        # src_mask: 这里的 mask 用于屏蔽未来信息
-        # src_key_padding_mask: 用于屏蔽 padding (index=0) 的部分，防止其影响注意力计算
-        causal_mask = self.get_causal_mask(seq_len, device)
-        padding_mask = input_ids == 0  # True 代表是 padding，需要被 mask
+        # 3. 通过 Transformer Encoder
+        # src: 输入嵌入 [B, N, D]
+        # mask: 因果掩码 [N, N]，控制位置间的注意力
+        # src_key_padding_mask: 填充掩码 [B, N]，屏蔽 padding 位置
+        output = self.transformer_encoder(
+            src=user_embeddings,
+            mask=causal_mask,  # 这个掩码会直接加到注意力分数上
+            src_key_padding_mask=padding_mask,  # PyTorch 内部会用 masked_fill_ 将其转换
+        )
 
-        # Transformer Forward
-        # 注意：nn.TransformerEncoder 自动处理了 Attention, FFN, Residual, Norm
-        # Attention Score = Q \cdot K^T + causal_mask + padding_mask
-        output = self.transformer_encoder(src=x, mask=causal_mask, src_key_padding_mask=padding_mask)
+        # 4. 最终的 Layer Normalization
+        output = self.layer_norm(output)  # [B, N, D]
 
-        output = self.layer_norm(output)  # torch.Size([2, 5, 64]) --> torch.Size([2, 5, 64])
         return output
-        # 3. Prediction (计算相似度)
-        # 原始论文中，使用 Transformer 的输出去点乘所有 Item 的 Embedding
-        # 维度变化: (B, L, H) @ (Num_Items, H)^T -> (B, L, Num_Items)
-        logits = torch.matmul(
-            output, self.item_emb.weight.transpose(0, 1)
-        )  # torch.Size([batch, seq_len, num_items+1]) logits[i, t, k] = batch_i在时间步t对物品k的预测分数
-        return logits
 
 
 @hydra.main(version_base="1.1", config_path="../../configs", config_name="train.yaml")
@@ -105,23 +112,30 @@ def main(cfg: DictConfig):
     model_cfg = cfg.model
     print(model_cfg)
 
-    model: SASRec = hydra.utils.instantiate(model_cfg.net)
+    model: SASRec = hydra.utils.instantiate(model_cfg.sequence_model)
 
-    # 模拟输入数据 (Batch=2, Len=50)
-    # 0 代表 padding
+    # 模拟输入数据
     BATCH_SIZE = 2
-    dummy_input = torch.randint(1, model_cfg.net.num_items, (BATCH_SIZE, model_cfg.net.max_len))
-    dummy_input[0, 40:] = 0  # 模拟第一个用户后面补零
+    SEQ_LEN = 50
+    EMBEDDING_DIM = model_cfg.sequence_model.embedding_dim
+
+    # 模拟 past_ids (Batch, Seq_Len)
+    past_ids = torch.randint(1, 100, (BATCH_SIZE, SEQ_LEN))
+    past_ids[0, 40:] = 0  # 模拟第一个用户后面补零
+
+    # 模拟 user_embeddings (Batch, Seq_Len, Dim)
+    user_embeddings = torch.randn(BATCH_SIZE, SEQ_LEN, EMBEDDING_DIM)
 
     # 前向传播
-    logits = model(dummy_input)
+    output = model(user_embeddings, past_ids)
 
-    print(f"Input shape: {dummy_input.shape}")  # [2, 50]
-    print(f"Output shape: {logits.shape}")  # [2, 50, 101] (包含 padding 0)
+    print(f"Input IDs shape: {past_ids.shape}")  # [2, 50]
+    print(f"Input Embeddings shape: {user_embeddings.shape}")  # [2, 50, 100]
+    print(f"Output shape: {output.shape}")  # [2, 50, 100]
 
-    # 简单验证：取最后一个时间步的预测
-    last_step_logits = logits[:, -1, :]
-    print("last_step_logits:", last_step_logits, last_step_logits.shape)  # [2, 64]
+    # 简单验证：取最后一个时间步的输出
+    last_step_output = output[:, -1, :]
+    print(f"Last step output shape: {last_step_output.shape}")  # [2, 100]
 
 
 if __name__ == "__main__":

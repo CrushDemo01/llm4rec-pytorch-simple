@@ -122,6 +122,8 @@ ignore = [
     # Consider iterable unpacking instead of concatenation
     "RUF005",
     # 忽略中文标点符号警告
+    "RUF001",
+    "RUF002",
     "RUF003",
 ]
 
