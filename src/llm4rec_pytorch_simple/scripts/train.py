@@ -4,7 +4,7 @@ import hydra
 import lightning as L
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from llm4rec_pytorch_simple.utils import (
     RankedLogger,
@@ -18,6 +18,7 @@ from llm4rec_pytorch_simple.utils import (
 
 log = RankedLogger(__name__, rank_zero_only=True)
 
+OmegaConf.register_new_resolver("eval", eval)   # 
 
 @task_wrapper
 def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:

@@ -9,10 +9,11 @@ logger = RankedLogger(__name__)
 
 
 class BCELoss(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, num_to_sample: int = 100, **kwargs):
         super().__init__()
         self.name = "BCELoss"
         self.criterion = nn.BCEWithLogitsLoss(reduction="none")
+        self.num_to_sample = num_to_sample  # 每个正样本采样的负样本数量
 
     def forward(
         self,
@@ -21,7 +22,6 @@ class BCELoss(torch.nn.Module):
         pos_embeddings: torch.Tensor,
         positive_ids: torch.Tensor,  # 正样本id，形状为 (batch_size,)，用于采样负样本
         supervision_mask: torch.Tensor,  # mask，用于过滤掉填充位置
-        num_to_sample: int,  # 每个正样本采样的负样本数量
     ) -> torch.Tensor:
         """
         前向传播函数，计算 BCE 损失。
@@ -40,7 +40,7 @@ class BCELoss(torch.nn.Module):
         # num_to_sample通常为几百到几千，根据计算资源调整
         _sampled_ids, sampled_negative_embeddings = negatives_sampler(
             positive_ids=positive_ids,
-            num_to_sample=num_to_sample,
+            num_to_sample=self.num_to_sample,
         )
 
         # l2归一化

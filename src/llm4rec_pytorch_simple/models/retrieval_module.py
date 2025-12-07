@@ -3,6 +3,8 @@ import torch
 from llm4rec_pytorch_simple.models.generative_recommenders import GenerativeRecommenders
 from llm4rec_pytorch_simple.utils.features import get_current_embeddings_simple, seq_features_from_row
 from llm4rec_pytorch_simple.utils.pylogger import RankedLogger
+from omegaconf import DictConfig,OmegaConf
+import hydra
 
 logger = RankedLogger(__name__)
 
@@ -124,7 +126,6 @@ class RetrievalModule(GenerativeRecommenders):
             pos_embeddings=target_emb,
             positive_ids=target_ids_shifted,  # 正样本id，形状为 (batch_size,)，用于采样负样本
             supervision_mask=mask,  # mask，用于过滤掉填充位置
-            num_to_sample=4,  # 每个正样本采样的负样本数量
         )
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
@@ -152,3 +153,16 @@ class RetrievalModule(GenerativeRecommenders):
     def predict_step(self, batch: tuple[torch.Tensor], batch_idx: int):
         # 在新数据上生成预测，不需要标签，不计算指标
         self.validation_step(batch, batch_idx)
+
+
+
+@hydra.main(version_base=None, config_path="../configs", config_name="train.yaml")
+def main(cfg: DictConfig):
+    cfg_model = cfg.model
+    print("Instantiating model with config:")
+    print(cfg_model)
+    hydra.utils.instantiate(cfg_model, _recursive_=False)
+
+
+if __name__ == "__main__":
+    main()

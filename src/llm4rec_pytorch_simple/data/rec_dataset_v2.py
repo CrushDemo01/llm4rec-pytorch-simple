@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import Optional, List
 
 import hydra
 import lightning as L
@@ -7,231 +7,129 @@ import pandas as pd
 import torch
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader, Dataset
+import os
+import ast
+import torch
+import numpy as np
+import pandas as pd
+from typing import Dict, List, Optional, Tuple, Any
 
 from llm4rec_pytorch_simple.utils.pylogger import RankedLogger
 
 logger = RankedLogger(__name__)  # __name__ 的值为模块的实际名称（包路径）
 
-
-def eval_str2list(s: str, ignore_last_n: int = 0):
-    y = [int(x) for x in s.split(",")]
-    if ignore_last_n > 0:
-        y = y[:-ignore_last_n]
-    return y
-
-
-def eval_int_list(
-    x,
-    target_len: int,
-    ignore_last_n: int,
-    shift_id_by: int,
-    sampling_kept_mask: Optional[list[bool]] = None,
-) -> tuple[list[int], int]:
+class RecoDataset_v2(torch.utils.data.Dataset):
     """
-    处理整数列表，包括忽略元素、ID偏移、采样和序列反转
-
-    参数:
-        x: 字符串形式的列表
-        target_len: 目标长度
-        ignore_last_n: 要忽略的元素数量
-        shift_id_by: ID偏移量
-        sampling_kept_mask: 采样掩码，指示哪些元素被保留
-
-    返回:
-        处理后的整数列表和列表长度
+    优化后的序列推荐数据集类。
     """
-    y = eval_str2list(x, ignore_last_n=ignore_last_n)
-    if sampling_kept_mask is not None:
-        y = [x for x, kept in zip(y, sampling_kept_mask) if kept]
-    y_len = len(y)
-    y.reverse()  # 反转序列，使最新交互在前. 这样后面取的时候直接 0 就是第一个了
-    if shift_id_by > 0:
-        y = [x + shift_id_by for x in y]
-    return y, y_len
 
-
-def truncate_or_pad_seq(y: list[int], target_len: int, chronological: bool) -> list[int]:
-    """
-    截断或填充序列到目标长度
-
-    参数:
-        y: 输入序列
-        target_len: 目标长度
-        chronological: 是否按时间顺序排列
-
-    返回:
-        处理后的序列
-    """
-    y_len = len(y)
-    if y_len < target_len:
-        # 序列太短，用0填充
-        y = y + [0] * (target_len - y_len)
-    else:
-        # 序列太长，需要截断
-        if not chronological:
-            # 逆序：保留前面的元素(最新的交互)
-            y = y[:target_len]
-        else:
-            # 时间顺序：保留后面的元素(最新的交互)
-            y = y[-target_len:]
-    assert len(y) == target_len
-    return y
-
-
-class RecDataset(Dataset):
     def __init__(
         self,
         ratings_file: str,
         max_sequence_length: int,
         ignore_last_n: int,
-        shift_id_by: int = 0,
-        chronological: bool = False,
         sample_ratio: float = 1.0,
-        **kwargs,
-    ):
-        """
-        参数:
-            ratings_file: 评分文件路径或DataFrame，包含用户-物品交互数据
-            max_sequence_length(max_sequence_length): 序列填充的目标长度，所有序列将被填充或截断到此长度
-            ignore_last_n: 忽略最后的交互数量，用于创建训练/验证/测试集
-                          (例如，对于训练集，ignore_last_n=1表示忽略最后一个交互作为预测目标)
-            shift_id_by: ID偏移量，用于调整物品或用户ID的起始值，默认为0
-            chronological: 是否按时间顺序排列交互，默认为False(逆序，最新交互在前)
-            sample_ratio: 采样比例，用于减少训练数据量，默认为1.0(使用全部数据)
-        """
+        # 【优化 4】Python 陷阱：修复可变默认参数，使用 None 替代 []
+        additional_columns: Optional[List[str]] = None,
+    ) -> None:
         super().__init__()
         logger.info(f"初始化 RecDataset，数据文件: {os.path.abspath(ratings_file)}")
         self.ratings_frame: pd.DataFrame = pd.read_csv(ratings_file, delimiter=",")
         self.max_sequence_length = max_sequence_length
         self.ignore_last_n = ignore_last_n
-        self.shift_id_by = shift_id_by
-        self.chronological = chronological
         self.sample_ratio = sample_ratio
-        self._cache = {}  # 缓存已处理的样本，提高重复访问效率
-
-    def __len__(self):
+        
+        # 初始化列表
+        self.additional_columns = additional_columns if additional_columns is not None else []# 检查列是否存在
+        self._check_columns()
+        
+        # 一次性eval进内容（小数据量）
+        for col in ['sequence_item_ids', 'sequence_ratings', 'sequence_timestamps']:
+            if isinstance(self.ratings_frame[col].iloc[0], str):
+                 # 使用 ast.literal_eval 更安全
+                self.ratings_frame[col] = self.ratings_frame[col].apply(ast.literal_eval)
+    
+    def _check_columns(self):
+        """检查必要的列是否存在"""
+        required_columns = ['user_id', 'sequence_item_ids', 'sequence_ratings', 'sequence_timestamps']
+        for col in required_columns + self.additional_columns:
+            if col not in self.ratings_frame.columns:
+                raise ValueError(f"Column {col} does not exist in the ratings data.")
+            
+    def __len__(self) -> int:
         return len(self.ratings_frame)
-
-    def __getitem__(self, index: int):
+    
+    def _process_sequence(
+        self, 
+        seq_list: List,
+        sampling_kept_mask: Optional[list[bool]] = None,
+    ) -> Tuple[torch.Tensor, Any, int]:
         """
-        获取指定索引的样本
+        处理单个序列：截断 -> 分割 History/Target -> Padding
         """
-        if index in self._cache:
-            return self._cache[index]
+        # A. Ignore Last N (用于构建训练/验证集)
+        if self.ignore_last_n > 0:
+            seq_list = seq_list[:-self.ignore_last_n]
+        
+        # B. 应用 mask 采样
+        if sampling_kept_mask is not None:
+            seq_list = [item for item, keep in zip(seq_list, sampling_kept_mask) if keep]
+        
+        # C. 处理空序列
+        if len(seq_list) == 0:
+            return torch.zeros(self.max_sequence_length, dtype=torch.int64), 0, 0
+        
+        # D. 分割 Target 和 History， 历史序列截断到 max_sequence_length
+        # 假设 seq_list 是按时间正序排列 [1, 2, 3, 4]
+        target = seq_list[-1]      # 4
+        history = seq_list[:-1][-self.max_sequence_length:]    # [1, 2, 3]
+        history_length = len(history)
+        
+        # 对不足 max_sequence_length 的历史序列进行 Padding# 创建全 0 Tensor
+        padding_length = self.max_sequence_length - history_length
+        if padding_length > 0:
+            padding_seq = torch.zeros(padding_length, dtype=torch.int64)
+            history_tensor = torch.cat([padding_seq, torch.tensor(history, dtype=torch.int64)]) if len(history) > 0 else padding_seq
+        else:
+            history_tensor = torch.tensor(history, dtype=torch.int64)
+            
+        return history_tensor, torch.tensor(target, dtype=torch.int64), history_length
 
-        # 使用 __load_data 方法获取完整的处理后数据
-        data_dict = self.__load_data(index)
-        self._cache[index] = data_dict
-        return data_dict
-
-    def __load_data(self, idx: int):
+    def __getitem__(self, idx) -> Dict[str, Any]:
+        # 直接获取预处理好的 List 数据
         data = self.ratings_frame.iloc[idx]
-
+        
         # 采样
         sampling_kept_mask = None
         if self.sample_ratio < 1.0:
-            sequence_item_ids_ = eval_str2list(data["sequence_item_ids"], self.ignore_last_n)
-            raw_length = len(sequence_item_ids_)
+            raw_length = len(data["sequence_item_ids"]) - self.ignore_last_n
             sampling_kept_mask = (torch.rand(raw_length) < self.sample_ratio).tolist()
-
-        # 处理物品 id：包括转成 list、ID 偏移、采样、反转（新的在前面）
-        movie_history, movie_history_len = eval_int_list(
-            data["sequence_item_ids"],
-            self.max_sequence_length,
-            self.ignore_last_n,
-            self.shift_id_by,  # 只有id 可能偏移一下
-            sampling_kept_mask,
-        )
-        # 处理评分序列
-        movie_history_ratings, ratings_len = eval_int_list(
-            data["sequence_ratings"],
-            self.max_sequence_length,
-            self.ignore_last_n,
-            0,
-            sampling_kept_mask=sampling_kept_mask,
-        )
-        # 处理时间戳序列
-        movie_timestamps, timestamps_len = eval_int_list(
-            data["sequence_timestamps"],
-            self.max_sequence_length,
-            self.ignore_last_n,
-            0,
-            sampling_kept_mask=sampling_kept_mask,
-        )
+        
+        historical_ids, target_ids, history_ids_length = self._process_sequence(data["sequence_item_ids"], sampling_kept_mask)
+        historical_ratings, target_ratings, history_ratings_length = self._process_sequence(data["sequence_ratings"], sampling_kept_mask)
+        historical_timestamps, target_timestamps, history_timestamps_length = self._process_sequence(data["sequence_timestamps"], sampling_kept_mask)
         # 确保所有序列长度一致
-        assert movie_history_len == timestamps_len, (
-            f"history len {movie_history_len} differs from timestamp len {timestamps_len}."
+        assert history_ids_length == history_timestamps_length, (
+            f"history len {history_ids_length} differs from timestamp len {history_timestamps_length}."
         )
-        assert movie_history_len == ratings_len, (
-            f"history len {movie_history_len} differs from ratings len {ratings_len}."
+        assert history_ids_length == history_ratings_length, (
+            f"history len {history_ids_length} differs from ratings len {history_ratings_length}."
         )
-
-        # 检查历史记录是否为空 (某些用户历史记录太短,经过 ignore_last_n 后可能为空)
-        if movie_history_len == 0:
-            # 返回一个填充的默认样本,避免训练时崩溃
-            # 这些样本会被 padding_mask 过滤掉,不会影响训练
-            max_seq_len = self.max_sequence_length
-            return {
-                "user_id": data["user_id"],
-                "historical_ids": torch.zeros(max_seq_len, dtype=torch.int64),
-                "historical_ratings": torch.zeros(max_seq_len, dtype=torch.int64),
-                "historical_timestamps": torch.zeros(max_seq_len, dtype=torch.int64),
-                "history_lengths": 0,
-                "target_ids": 0,
-                "target_ratings": 0,
-                "target_timestamps": 0,
-            }
-
-        # 分离历史序列和目标(预测目标)
-        # 第一个元素(最新的交互)作为目标，其余作为历史
-        historical_ids = movie_history[1:]
-        historical_ratings = movie_history_ratings[1:]
-        historical_timestamps = movie_timestamps[1:]
-        target_ids = movie_history[0]
-        target_ratings = movie_history_ratings[0]
-        target_timestamps = movie_timestamps[0]
-
-        # 如果需要按时间顺序排列，则反转历史序列
-        if self.chronological:
-            historical_ids.reverse()
-            historical_ratings.reverse()
-            historical_timestamps.reverse()
-
-        # 处理序列长度，确保不超过最大长度
-        max_seq_len = self.max_sequence_length  # 这个是历史序列长度
-        history_length = min(len(historical_ids), max_seq_len)
-
-        historical_ids = truncate_or_pad_seq(
-            historical_ids,
-            max_seq_len,
-            self.chronological,
-        )
-        historical_ratings = truncate_or_pad_seq(
-            historical_ratings,
-            max_seq_len,
-            self.chronological,
-        )
-        historical_timestamps = truncate_or_pad_seq(
-            historical_timestamps,
-            max_seq_len,
-            self.chronological,
-        )
-
+        
         # 构建返回结果
         ret = {
             "user_id": data["user_id"],
-            "historical_ids": torch.tensor(historical_ids, dtype=torch.int64),
-            "historical_ratings": torch.tensor(historical_ratings, dtype=torch.int64),
-            "historical_timestamps": torch.tensor(historical_timestamps, dtype=torch.int64),
-            "history_lengths": history_length,
+            "historical_ids": historical_ids,
+            "historical_ratings": historical_ratings,
+            "historical_timestamps": historical_timestamps,
+            "history_lengths": history_ids_length,
             "target_ids": target_ids,
             "target_ratings": target_ratings,
             "target_timestamps": target_timestamps,
         }
         return ret
 
-
-class RecoDataModule(L.LightningDataModule):
+class RecoDataModule_v2(L.LightningDataModule):
     def __init__(
         self,
         train_dataset: DictConfig = None,
@@ -241,7 +139,6 @@ class RecoDataModule(L.LightningDataModule):
         data_path: str = "ml-1m/data",
         max_jagged_dimension: int = 16,
         max_sequence_length: int = 200,
-        chronological: bool = True,
         batch_size: int = 4,
         sample_ratio: float = 1.0,
         num_workers: int = os.cpu_count() // 4,
@@ -256,7 +153,6 @@ class RecoDataModule(L.LightningDataModule):
         self.val_dataset = val_dataset
         self.test_dataset = test_dataset
         self.max_sequence_length = max_sequence_length
-        self.chronological = chronological
         self.batch_size = batch_size
         self.sample_ratio = sample_ratio
         self.num_workers = num_workers
@@ -321,7 +217,6 @@ class RecoDataModule(L.LightningDataModule):
         """
         kwargs = {
             "max_sequence_length": self.max_sequence_length,
-            "chronological": self.chronological,
             "sample_ratio": self.sample_ratio,
         }
         if stage == "fit":
@@ -380,11 +275,11 @@ class RecoDataModule(L.LightningDataModule):
         # 保存合并后的数据到文件
         ratings_frame.to_csv(output_file, index=False)
 
-
 # 你直接运行了 rec_dataset.py，它位于 data/ 目录下，而 Hydra 总是把 config_path 基于“执行文件所在目录”作为默认 provider root，这导致 config 搜索路径完全错误。
-@hydra.main(version_base="1.1", config_path="../configs", config_name="train.yaml")
+@hydra.main(version_base="1.2", config_path="../configs", config_name="train.yaml")
 def main(cfg: DictConfig):
     cfg = cfg.data
+    print("=== RecoDataModule 测试 ===")
     print(f"cfg: {cfg}")
     # 2. 创建RecoDataModule实例
     kwargs = {
@@ -392,7 +287,7 @@ def main(cfg: DictConfig):
         "val_dataset": cfg.val_dataset,
         "test_dataset": cfg.test_dataset,
     }
-    datamodule: RecoDataModule = hydra.utils.instantiate(cfg, **kwargs, _recursive_=False)
+    datamodule: RecoDataModule_v2 = hydra.utils.instantiate(cfg, **kwargs, _recursive_=False)
 
     print("✓ RecoDataModule 实例创建成功")
 

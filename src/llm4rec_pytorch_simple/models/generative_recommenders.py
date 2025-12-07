@@ -3,8 +3,7 @@ from typing import Any
 import hydra
 import lightning as L
 import torch
-from omegaconf import DictConfig
-
+from omegaconf import DictConfig,OmegaConf
 from llm4rec_pytorch_simple.data.rec_dataset import RecoDataModule
 from llm4rec_pytorch_simple.models.archs.SASRec import SASRec
 from llm4rec_pytorch_simple.models.embeddings.embeddings import LocalEmbedding
@@ -207,13 +206,3 @@ class GenerativeRecommenders(L.LightningModule):
         output_embeddings = self._normalize(output_embeddings, self.norm_type)
         return output_embeddings
 
-
-@hydra.main(version_base=None, config_path="../configs", config_name="train.yaml")
-def main(cfg: DictConfig):
-    cfg_model = cfg.model
-    print(cfg_model)
-    hydra.utils.instantiate(cfg_model, _recursive_=False)
-
-
-if __name__ == "__main__":
-    main()

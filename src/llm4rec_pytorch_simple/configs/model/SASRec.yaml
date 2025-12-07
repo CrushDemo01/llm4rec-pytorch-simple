@@ -1,46 +1,40 @@
 _target_: llm4rec_pytorch_simple.models.retrieval_module.RetrievalModule
 
-# ========================================
-# 公共参数 - 使用下划线前缀避免传递给 __init__()
-# ========================================
-# 数据相关
-_num_items: ${data.num_items}              # 物品总数 (3883 部电影 + 1 for padding)
-_max_sequence_len: ${data.max_sequence_length}         # 最大序列长度 (199 历史 + 1 输出)
-
 # 模型架构相关
-_embedding_dim: 50             # 嵌入维度
-_dropout: 0.1                  # Dropout 比率
+item_embedding_dim: 50             # 嵌入维度
+dropout: 0.2                  # Dropout 比率
+# 生成式推荐的输出序列长度，最短是 1
+gr_output_length: 10
 
-# ========================================
-# 子模块配置 - 使用 ${model._xxx} 引用公共参数
-# ========================================
 embedding:
   _target_: llm4rec_pytorch_simple.models.embeddings.embeddings.LocalEmbedding
-  num_items: ${model._num_items}
-  embedding_dim: ${model._embedding_dim}
+  num_items: ${data.num_items}
+  embedding_dim: ${model.item_embedding_dim}
   padding_idx: 0
 
 negative_sampler:
   _target_: llm4rec_pytorch_simple.models.negative_samples.negative_samples.LocalNegativeSamples
-  num_items: ${model._num_items}
+  num_items: ${data.num_items}
 
 sequence_model:
   _target_: llm4rec_pytorch_simple.models.archs.SASRec.SASRec
-  max_sequence_len: ${model._max_sequence_len}
-  embedding_dim: ${model._embedding_dim}
+  max_sequence_len: ${data.max_sequence_length}
+  embedding_dim: ${model.item_embedding_dim}
   num_blocks: 2
   num_heads: 1
   ffn_hidden_extend: 2
   ffn_activation_fn: "gelu"
-  dropout: ${model._dropout}
+  dropout: ${model.dropout}
 
 loss:
   _target_: llm4rec_pytorch_simple.models.losses.losses.BCELoss
+  num_to_sample: 128
+  softmax_temperature: 0.05
 
 metrics:
   _target_: llm4rec_pytorch_simple.models.metrics.metrics.RetrievalMetrics
-  topk: 10
-  at_k_list: [10, 20, 50]
+  topk: 200
+  at_k_list: [10, 50, 100, 200]
 
 optimizer:
   _target_: torch.optim.AdamW
@@ -49,25 +43,26 @@ optimizer:
   weight_decay: 0.01
 
 scheduler:
-  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  _target_: torch.optim.lr_scheduler.ConstantLR
   _partial_: true
-  T_max: 10000
-  eta_min: 1e-6
+
+# # cosine learning rate scheduler
+# scheduler:
+#   _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+#   _partial_: true
+#   T_max: 10000
+#   eta_min: 1e-6
+
 
 # 学习率调度器监控的验证指标
 lr_monitor_metric: val/hr@10
 
+# 位置编码不仅仅是_max_sequence_len，还应该是 _max_sequence_len + gr_output_length
 positional_emb:
   _target_: llm4rec_pytorch_simple.models.pre_processors.positional_emb.SinusoidalPositionalEncoding
-  max_sequence_len: ${model._max_sequence_len}
-  embedding_dim: ${model._embedding_dim}
-  dropout_rate: ${model._dropout}
-
-# 生成式推荐的输出序列长度，最短是 1
-gr_output_length: 1
-
-# 项目嵌入的维度
-item_embedding_dim: ${model._embedding_dim}
+  max_sequence_len: ${eval:${data.max_sequence_length} + ${model.gr_output_length}}
+  embedding_dim: ${model.item_embedding_dim}
+  dropout_rate: ${model.dropout}
 
 # compile model for faster training with pytorch 2.0
 torch_compile: False

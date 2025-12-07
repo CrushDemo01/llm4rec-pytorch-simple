@@ -1,0 +1,4 @@
+
+_target_: llm4rec_pytorch_simple.data.prepare_data.PrepareDataMovieLens
+data_dir: ${paths.data_dir}
+max_hash_ranges: ${data.max_hash_ranges}
