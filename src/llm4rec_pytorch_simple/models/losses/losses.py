@@ -25,7 +25,7 @@ class BCELoss(torch.nn.Module):
     ) -> torch.Tensor:
         """
         前向传播函数，计算 BCE 损失。
-
+        
         参数:
         - output_embeddings: 模型输出的 embeddings，形状为 (batch_size, embedding_dim)。
         - pos_embeddings: 正样本的 embeddings，形状为 (batch_size, embedding_dim)。
@@ -62,6 +62,16 @@ class BCELoss(torch.nn.Module):
         loss = weighted_losses.sum() / supervision_mask.sum()
         return loss
 
+# 网络权重正则化 loss-l2 范数
+class L2RegularizationLoss(torch.nn.Module):
+    def __init__(self, model, weight_decay):
+        super().__init__()
+        self.model = model
+        self.weight_decay = weight_decay
+
+    def forward(self):
+        l2_norm = sum(p.pow(2.0).sum() for p in self.model.parameters())
+        return self.weight_decay * l2_norm
 
 if __name__ == "__main__":
     loss = BCELoss()

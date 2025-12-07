@@ -8,7 +8,7 @@ _num_items: ${data.num_items}              # 物品总数 (3883 部电影 + 1 fo
 _max_sequence_len: ${data.max_sequence_length}         # 最大序列长度 (199 历史 + 1 输出)
 
 # 模型架构相关
-_embedding_dim: 40             # 嵌入维度
+_embedding_dim: 50             # 嵌入维度
 _dropout: 0.1                  # Dropout 比率
 
 # ========================================
@@ -28,9 +28,9 @@ sequence_model:
   _target_: llm4rec_pytorch_simple.models.archs.SASRec.SASRec
   max_sequence_len: ${model._max_sequence_len}
   embedding_dim: ${model._embedding_dim}
-  num_blocks: 16
-  num_heads: 4
-  ffn_hidden_extend: 4
+  num_blocks: 2
+  num_heads: 1
+  ffn_hidden_extend: 2
   ffn_activation_fn: "gelu"
   dropout: ${model._dropout}
 
