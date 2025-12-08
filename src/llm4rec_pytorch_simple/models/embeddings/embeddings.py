@@ -20,17 +20,21 @@ class EmbeddingModule(torch.nn.Module):
         # unsqueeze(0) 增加batch维度，变为(1, X)
         self.register_buffer("_ids", torch.as_tensor(ids).unsqueeze(0))
         self.top_k_module = top_k_module
-        self._embeddings_t = None  # 子类需要设置
 
     @abc.abstractmethod
     def get_item_embeddings(self, item_ids: torch.Tensor) -> torch.Tensor:
         pass
 
+    @abc.abstractmethod
+    def get_item_embeddings_t(self) -> torch.Tensor:
+        """获取转置的 embedding 权重（用于检索）"""
+        pass
+
     def get_top_k_outputs(
         self,
-        query_embeddings: torch.Tensor,
+        query_embeddings: torch.Tensor, # torch.Size([64, 50])
         k: Optional[int] = None,
-        invalid_ids: Optional[torch.Tensor] = None,
+        invalid_ids: Optional[torch.Tensor] = None, # torch.Size([64, 210])
     ):
         """
         根据查询嵌入向量，找到最相似的K个候选物品，同时过滤掉无效ID
@@ -43,12 +47,12 @@ class EmbeddingModule(torch.nn.Module):
 
         # 计算实际需要检索的数量 = k + 需要过滤的数量
         # 这样可以确保过滤后仍有k个有效结果
-        k_prime = k + max_num_invalid_ids
+        k_prime = min(k + max_num_invalid_ids, self._ids.size(1))
 
         # 执行topk搜索
         top_k_prime_scores, top_k_prime_ids = self.top_k_module(
             query_embeddings=query_embeddings,
-            item_embeddings_t=self._embeddings_t,  # (D, X) 转置后的嵌入
+            item_embeddings_t=self.get_item_embeddings_t(),  # 动态获取转置的嵌入
             item_ids=self._ids,  # (1, X) 或 (B, X) 物品ID
             k=k_prime,  # 检索k_prime个结果
             sorted=True,  # 按分数排序
@@ -66,7 +70,7 @@ class EmbeddingModule(torch.nn.Module):
             top_k_scores = top_k_prime_scores[:, :k]
             top_k_ids = top_k_prime_ids[:, :k]
 
-        return top_k_ids, top_k_scores
+        return top_k_ids, top_k_scores  # torch.Size([64, 200])
 
 
 def _filter_invalid_ids_simple(
@@ -157,12 +161,6 @@ class LocalEmbedding(EmbeddingModule):
         self.embeddings = torch.nn.Embedding(num_items + 1, embedding_dim, padding_idx=padding_idx)
         self.__init_params()
 
-        # 设置转置的embeddings用于检索(只包含有效物品,排除padding_idx=0)
-        # embeddings.weight shape: (num_items+1, embedding_dim)
-        # 取索引1到num_items的embeddings,然后转置
-        # 使用 self.embeddings.weight.data[1:] 排除第一个 padding embedding
-        self._embeddings_t = self.embeddings.weight.data[1:].t()  # (embedding_dim, num_items)
-
     def __init_params(self) -> None:
         """Initialize the parameters of the module."""
         torch.nn.init.normal_(self.embeddings.weight, std=0.01)
@@ -177,6 +175,17 @@ class LocalEmbedding(EmbeddingModule):
 
     def get_item_embeddings(self, item_ids: torch.Tensor) -> torch.Tensor:
         return self.embeddings(item_ids)
+
+    def get_item_embeddings_t(self) -> torch.Tensor:
+        """获取转置的 embedding 权重（用于检索）
+        
+        返回排除 padding (index=0) 的转置 embedding。
+        .T 创建视图，与 embedding.weight 共享内存，自动同步更新。
+        
+        Returns:
+            shape: (embedding_dim, num_items)
+        """
+        return self.embeddings.weight[1:].T
 
 
 # ==================== 测试函数 ====================

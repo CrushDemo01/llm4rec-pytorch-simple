@@ -21,9 +21,9 @@ class RetrievalModule(GenerativeRecommenders):
         """
         seq_embeddings = self.forward(
             past_ids=seq_features["historical_ids"], past_embeddings=seq_features["historical_id_embeddings"]
-        )  # [B, X]
+        )  # [B, X]， embedding：64,210,50
 
-        # 获取当前序列的最后一个有效位置的嵌入
+        # 获取当前序列的最后一个有效位置的嵌入，torch.Size([64, 50])
         current_embeddings = get_current_embeddings_simple(seq_features["historical_lengths"], seq_embeddings)
 
         top_k_ids, top_k_scores = self.embedding.get_top_k_outputs(
@@ -49,7 +49,7 @@ class RetrievalModule(GenerativeRecommenders):
 
         # forward pass
         top_k_ids, _top_k_scores = self.retrieve(seq_features)
-        self.metrics.update(top_k_ids=top_k_ids, target_ids=target_labels["target_ids"])
+        self.metrics.update(top_k_ids=top_k_ids, target_ids=target_labels["target_ids"])    # # b,200   b,1
 
     def on_validation_epoch_end(self) -> None:
         # 在验证集上评估模型，计算各种指标（准确率、召回率等）

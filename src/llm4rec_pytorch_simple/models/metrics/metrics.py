@@ -1,9 +1,9 @@
 from typing import Optional
-
+import torchmetrics     # 继承 torchmetrics (为了自动同步)
 import torch
 
 
-class RetrievalMetrics:
+class RetrievalMetrics(torchmetrics.Metric):
     """
     原生 PyTorch 实现的检索指标计算器。
     不依赖 torchmetrics，适用于单机环境。
@@ -14,26 +14,22 @@ class RetrievalMetrics:
     - 修正了 MRR 在未命中时的计算逻辑
     """
 
-    def __init__(self, topk: int, at_k_list: Optional[list[int]] = None):
+    def __init__(self, topk: int, at_k_list: Optional[list[int]] = None, **kwargs):
         """
         Args:
             topk (int): 截断长度 (Top-K)
             at_k_list (list): 需要计算具体指标的 K 值列表 (e.g. [5, 10])
                               如果不填，默认只计算 @k
         """
+        super().__init__(**kwargs)
         self.at_k_list = at_k_list if at_k_list else [topk]
         # 确保 topk 足够大以覆盖 at_k_list 中的最大值
         # 如果 topk < max(at_k_list)，则检索时无法判断是否命中较大的 k
         self.topk = max(topk, max(self.at_k_list))
 
         # 内部状态：用于暂存每个 batch 的数据
-        self.preds_buffer = []
-        self.targets_buffer = []
-
-    def reset(self):
-        """重置状态，通常在每个 Epoch 开始前调用"""
-        self.preds_buffer = []
-        self.targets_buffer = []
+        self.add_state("top_k_ids", default=[], dist_reduce_fx="cat")
+        self.add_state("target_ids", default=[], dist_reduce_fx="cat")
 
     def update(self, top_k_ids: torch.Tensor, target_ids: torch.Tensor):
         """
@@ -48,18 +44,15 @@ class RetrievalMetrics:
             target_ids = target_ids.view(-1, 1)
 
         # 存入 buffer (移动到 CPU 以防止显存爆炸，如果显存够大可以不移)
-        self.preds_buffer.append(top_k_ids.detach().cpu())
-        self.targets_buffer.append(target_ids.detach().cpu())
+        self.top_k_ids.append(top_k_ids.detach().cpu())
+        self.target_ids.append(target_ids.detach().cpu())
 
     def compute(self):
         """
         计算所有指标。
         """
-        if not self.preds_buffer:
-            return {}
-        # 1. 拼接所有 Batch 的数据, 当前全部 batch 的数据合并起来才是正确的一个
-        all_preds = torch.cat(self.preds_buffer, dim=0)
-        all_targets = torch.cat(self.targets_buffer, dim=0)
+        all_preds = torchmetrics.utilities.dim_zero_cat(self.top_k_ids)
+        all_targets = torchmetrics.utilities.dim_zero_cat(self.target_ids)
 
         # 2. 计算排名 (Ranking Logic)
         # 技巧：把 target 拼接到 pred 的最后一位。
@@ -81,24 +74,25 @@ class RetrievalMetrics:
         _, rank_indices = torch.max(extended == all_targets, dim=1)
         # 转为 1-based rank
         ranks = rank_indices + 1
+        # 为了向量化计算，把 rank 转为 float
+        ranks_float = ranks.float()
 
         # 3. 计算指标
         metrics = {}
-        # 为了向量化计算，把 rank 转为 float
-        ranks_float = ranks.float()
 
         # --- HR@K & NDCG@K ---
         for at_k in self.at_k_list:
             # HR: 只要 rank <= at_k 就是 1，否则 0
-            hr_tensor = (ranks <= at_k).float()
-            metrics[f"hr@{at_k}"] = hr_tensor.float().mean().item()
-
+            metrics[f"hr@{at_k}"] = (ranks <= at_k).float().mean()
             # NDCG: 1 / log2(rank + 1)
-            ndcg_tensor = torch.where(ranks <= at_k, 1.0 / torch.log2(ranks_float + 1.0), torch.zeros_like(ranks_float))
-            metrics[f"ndcg@{at_k}"] = ndcg_tensor.float().mean().item()
+            ndcg_tensor = torch.where(
+                ranks <= at_k, 
+                1.0 / torch.log2(ranks_float + 1.0), 
+                torch.zeros_like(ranks_float)
+            )
+            metrics[f"ndcg@{at_k}"] = ndcg_tensor.mean()
 
-        # --- MRR ---
-        # 修正 MRR：计算所有样本的倒数排名平均值
+        # --- MRR --- 计算所有样本的倒数排名平均值
         # 命中的样本：倒数排名 = 1/rank
         # 未命中的样本：倒数排名 = 0
         reciprocal_ranks = torch.where(
@@ -106,7 +100,7 @@ class RetrievalMetrics:
             1.0 / ranks_float,  # 命中的样本：1/rank
             torch.zeros_like(ranks_float),  # 未命中的样本：0
         )
-        metrics["mrr"] = reciprocal_ranks.float().mean().item()
+        metrics["mrr"] = reciprocal_ranks.mean()
 
         return metrics
 

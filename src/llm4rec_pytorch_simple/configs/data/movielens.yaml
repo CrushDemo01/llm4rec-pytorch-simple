@@ -6,26 +6,26 @@ max_hash_ranges:
 data_path: ${paths.data_dir}
 max_jagged_dimension: 16
 max_sequence_length: 200     # 最大序列长度 (199 历史 + 1 输出)
-num_items: 3884              # 物品总数 (3883 部电影 + 1 for padding)
-chronological: True
-batch_size: 16
+num_items: 3883              # 物品总数 (3883 部电影), 这里不用+1，embedding的地方已经加过了
+batch_size: 64
 sample_ratio: 1.0
 num_workers: 4
 prefetch_factor: 4
+persistent_workers: True
 
 split_mode: "user_id" # 数据集按时间划分方式： global 全局划分，user 基于用户的划分，user_id 基于用户ID的划分
 
 train_dataset:
-  _target_: llm4rec_pytorch_simple.data.rec_dataset.RecDataset
+  _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataset
   ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_train_data.csv"
-  ignore_last_n: 1  # 训练集:最后1个作为目标，这样那output就要是1
+  ignore_last_n: 0  # 全用上，因为这个是用 id 分的训练集
 
 val_dataset:
-  _target_: llm4rec_pytorch_simple.data.rec_dataset.RecDataset
+  _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataset
   ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_test_data.csv"
-  ignore_last_n: 1  # 验证集:最后1个作为目标(用于调参)
+  ignore_last_n: 0  # 全用上，因为这个是用 id 分的验证集
 
 test_dataset:
-  _target_: llm4rec_pytorch_simple.data.rec_dataset.RecDataset
+  _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataset
   ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_test_data.csv"
   ignore_last_n: 0
