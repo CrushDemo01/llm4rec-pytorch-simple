@@ -143,8 +143,8 @@ class RetrievalModule(GenerativeRecommenders):
                 prog_bar=True,  # ✅ 显示在进度条
                 logger=True,  # ✅ 发送到CSV和TensorBoard
             )
-            logger.info(f"val results: {results}")
-            self.metrics.reset()
+        logger.info(f"val results: {results}")
+        self.metrics.reset()
 
     def test_step(self, batch: tuple[torch.Tensor], batch_idx: int):
         # 在测试集上评估模型，计算各种指标（准确率、召回率等）
@@ -153,7 +153,6 @@ class RetrievalModule(GenerativeRecommenders):
     def predict_step(self, batch: tuple[torch.Tensor], batch_idx: int):
         # 在新数据上生成预测，不需要标签，不计算指标
         self.validation_step(batch, batch_idx)
-
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="train.yaml")

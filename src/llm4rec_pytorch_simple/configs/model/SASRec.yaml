@@ -29,7 +29,6 @@ sequence_model:
 loss:
   _target_: llm4rec_pytorch_simple.models.losses.losses.BCELoss
   num_to_sample: 128
-  softmax_temperature: 0.05
 
 metrics:
   _target_: llm4rec_pytorch_simple.models.metrics.metrics.RetrievalMetrics
