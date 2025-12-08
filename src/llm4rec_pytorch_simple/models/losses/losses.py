@@ -9,11 +9,12 @@ logger = RankedLogger(__name__)
 
 
 class BCELoss(torch.nn.Module):
-    def __init__(self, num_to_sample: int = 100, **kwargs):
+    def __init__(self, num_to_sample: int = 100, softmax_temperature: float = 0.05, **kwargs):
         super().__init__()
         self.name = "BCELoss"
         self.criterion = nn.BCEWithLogitsLoss(reduction="none")
         self.num_to_sample = num_to_sample  # 每个正样本采样的负样本数量
+        self.softmax_temperature = softmax_temperature
 
     def forward(
         self,
@@ -48,13 +49,16 @@ class BCELoss(torch.nn.Module):
         pos_embeddings = F.normalize(pos_embeddings, dim=-1, p=2)
         sampled_negative_embeddings = F.normalize(sampled_negative_embeddings, dim=-1, p=2)  # shape [32, 200, 4, 64]
 
-        pos_scores = (output_embeddings * pos_embeddings).sum(dim=-1)
+        # 计算分数并除以温度系数
+        pos_scores = (output_embeddings * pos_embeddings).sum(dim=-1) / self.softmax_temperature
+        
         # 扩展 output_embeddings 以匹配 sampled_negative_embeddings 的维度
         # output_embeddings: [..., D] -> [..., 1, D]
         # sampled_negative_embeddings: [..., num_to_sample, D]
         # 广播后: [..., num_to_sample, D]
         output_embeddings_expanded = output_embeddings.unsqueeze(-2)  # [..., 1, D]
-        neg_scores = (output_embeddings_expanded * sampled_negative_embeddings).sum(dim=-1)  # [..., num_to_sample]
+        neg_scores = (output_embeddings_expanded * sampled_negative_embeddings).sum(dim=-1) / self.softmax_temperature # [..., num_to_sample]
+        
         weighted_losses = (
             self.criterion(pos_scores, torch.ones_like(pos_scores))
             + self.criterion(neg_scores, torch.zeros_like(neg_scores)).mean(dim=-1)  # 对负样本维度求平均

@@ -18,12 +18,12 @@ negative_sampler:
 
 sequence_model:
   _target_: llm4rec_pytorch_simple.models.archs.SASRec.SASRec
-  max_sequence_len: ${data.max_sequence_length}
+  max_sequence_len: ${eval:${data.max_sequence_length} + ${model.gr_output_length}}
   embedding_dim: ${model.item_embedding_dim}
   num_blocks: 2
   num_heads: 1
   ffn_hidden_extend: 2
-  ffn_activation_fn: "gelu"
+  ffn_activation_fn: "relu"  # SASRec 论文使用 ReLU
   dropout: ${model.dropout}
 
 loss:
@@ -40,11 +40,17 @@ optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
   lr: 0.001
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
   weight_decay: 0.01
+  amsgrad: false
 
 scheduler:
-  _target_: torch.optim.lr_scheduler.ConstantLR
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
   _partial_: true
+  T_max: 50              # 一个完整余弦周期内的 epoch 数
+  eta_min: 1.0e-5        # 最低学习率
+  last_epoch: -1         # 复现时可修改为最新 epoch
 
 # # cosine learning rate scheduler
 # scheduler:
@@ -59,7 +65,7 @@ lr_monitor_metric: val/hr@10
 
 # 位置编码不仅仅是_max_sequence_len，还应该是 _max_sequence_len + gr_output_length
 positional_emb:
-  _target_: llm4rec_pytorch_simple.models.pre_processors.positional_emb.SinusoidalPositionalEncoding
+  _target_: llm4rec_pytorch_simple.models.pre_processors.positional_emb.LearnablePositionalEmbedding
   max_sequence_len: ${eval:${data.max_sequence_length} + ${model.gr_output_length}}
   embedding_dim: ${model.item_embedding_dim}
   dropout_rate: ${model.dropout}

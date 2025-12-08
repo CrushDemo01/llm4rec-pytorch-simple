@@ -89,7 +89,7 @@ class RecoDataset_v2(torch.utils.data.Dataset):
         padding_length = self.max_sequence_length - history_length
         if padding_length > 0:
             padding_seq = torch.zeros(padding_length, dtype=torch.int64)
-            history_tensor = torch.cat([padding_seq, torch.tensor(history, dtype=torch.int64)]) if len(history) > 0 else padding_seq
+            history_tensor = torch.cat([torch.tensor(history, dtype=torch.int64), padding_seq]) if len(history) > 0 else padding_seq
         else:
             history_tensor = torch.tensor(history, dtype=torch.int64)
             

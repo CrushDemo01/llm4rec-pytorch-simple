@@ -17,12 +17,12 @@ split_mode: "user_id" # 数据集按时间划分方式： global 全局划分，
 train_dataset:
   _target_: llm4rec_pytorch_simple.data.rec_dataset_v2.RecoDataset_v2
   ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_train_data.csv"
-  ignore_last_n: 1  # 训练集:最后1个作为目标，这样那output就要是1
+  ignore_last_n: 0  # 全用上，因为这个是用 id 分的训练集
 
 val_dataset:
   _target_: llm4rec_pytorch_simple.data.rec_dataset_v2.RecoDataset_v2
   ratings_file: "${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_test_data.csv"
-  ignore_last_n: 1  # 验证集:最后1个作为目标(用于调参)
+  ignore_last_n: 0  # 全用上，因为这个是用 id 分的验证集
 
 test_dataset:
   _target_: llm4rec_pytorch_simple.data.rec_dataset_v2.RecoDataset_v2
