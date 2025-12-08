@@ -60,10 +60,10 @@ class SASRec(nn.Module):
         [True,  True,  True,  False],   # 位置2可以看位置0-2
         [True,  True,  True,  True]]    # 位置3可以看位置0-3
         """
-        # 先创建张量，再调用 tril()，避免旧版 PyTorch 不支持 dtype 参数
-        mask = torch.ones(self.max_sequence_len, self.max_sequence_len)
-        mask = torch.tril(mask)  # 下三角矩阵
-        mask = mask.float().masked_fill(mask == 0, float("-inf")).masked_fill(mask == 1, 0.0)
+        # 生成因果遮罩 (Upper Triangular Mask)
+        # True 表示该位置被屏蔽 (mask out)，False 表示该位置可见
+        # triu(diagonal=1) 生成上三角矩阵 (不含对角线)，即 j > i 的位置为 1 (True)
+        mask = torch.triu(torch.ones(self.max_sequence_len, self.max_sequence_len), diagonal=1).bool()
         self.register_buffer("causal_mask", mask)
 
     def _init_weights(self, module):

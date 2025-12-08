@@ -143,6 +143,7 @@ class RecoDataModule_v2(L.LightningDataModule):
         sample_ratio: float = 1.0,
         num_workers: int = os.cpu_count() // 4,
         prefetch_factor: int = 4,
+        persistent_workers: bool = False,
         **kwargs,
     ):
         if max_hash_ranges is None:
@@ -157,6 +158,7 @@ class RecoDataModule_v2(L.LightningDataModule):
         self.sample_ratio = sample_ratio
         self.num_workers = num_workers
         self.prefetch_factor = prefetch_factor
+        self.persistent_workers = persistent_workers
         self.max_jagged_dimension = max_jagged_dimension  # # 每个特征保留的最大数据
         self.max_hash_ranges = max_hash_ranges
         self.movie_feat = self.__init_item_ids()
@@ -232,6 +234,7 @@ class RecoDataModule_v2(L.LightningDataModule):
             shuffle=True,
             num_workers=self.num_workers,
             prefetch_factor=self.prefetch_factor,
+            persistent_workers=self.persistent_workers,
         )
 
     def val_dataloader(self):
@@ -241,6 +244,7 @@ class RecoDataModule_v2(L.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             prefetch_factor=self.prefetch_factor,
+            persistent_workers=self.persistent_workers,
         )
 
     def test_dataloader(self):
@@ -250,6 +254,7 @@ class RecoDataModule_v2(L.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             prefetch_factor=self.prefetch_factor,
+            persistent_workers=self.persistent_workers,
         )
 
     def save_predictions(self, output_file: str, predictions: dict):
