@@ -1,0 +1,67 @@
+_target_: llm4rec_pytorch_simple.models.retrieval_module.RetrievalModule
+
+# 模型架构相关
+item_embedding_dim: 50             # 嵌入维度
+dropout: 0.2                       # Dropout 比率
+# 生成式推荐的输出序列长度，最短是 1
+gr_output_length: 10
+
+embedding:
+  _target_: llm4rec_pytorch_simple.models.embeddings.embeddings.LocalEmbedding
+  num_items: ${data.num_items}
+  embedding_dim: ${model.item_embedding_dim}
+  padding_idx: 0
+
+negative_sampler:
+  _target_: llm4rec_pytorch_simple.models.negative_samples.negative_samples.LocalNegativeSamples
+  num_items: ${data.num_items}
+
+sequence_model:
+  _target_: llm4rec_pytorch_simple.models.archs.HSTU.HSTUModel
+  max_sequence_len: ${eval:${data.max_sequence_length} + ${model.gr_output_length}}
+  embedding_dim: ${model.item_embedding_dim}
+  num_blocks: 2                    # HSTU Block 数量
+  num_heads: 1                     # 多头注意力头数
+  attention_dim: ${model.item_embedding_dim}   # 注意力维度
+  linear_hidden_dim: ${model.item_embedding_dim} # 线性隐藏层维度
+  activation_fn: "SiLU"            # 激活函数 (SiLU 或 GELU)
+  dropout: ${model.dropout}
+  eps: 1.0e-6
+
+loss:
+  _target_: llm4rec_pytorch_simple.models.losses.losses.BCELoss
+  num_to_sample: 128
+
+metrics:
+  _target_: llm4rec_pytorch_simple.models.metrics.metrics.RetrievalMetrics
+  topk: 200
+  at_k_list: [10, 50, 100, 200]
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 0.001
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  weight_decay: 0.01
+  amsgrad: false
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  _partial_: true
+  T_max: 50              # 一个完整余弦周期内的 epoch 数
+  eta_min: 1.0e-5        # 最低学习率
+  last_epoch: -1         # 复现时可修改为最新 epoch
+
+# 学习率调度器监控的验证指标
+lr_monitor_metric: val/hr@10
+
+# 位置编码不仅仅是_max_sequence_len，还应该是 _max_sequence_len + gr_output_length
+positional_emb:
+  _target_: llm4rec_pytorch_simple.models.pre_processors.positional_emb.LearnablePositionalEmbedding
+  max_sequence_len: ${eval:${data.max_sequence_length} + ${model.gr_output_length}}
+  embedding_dim: ${model.item_embedding_dim}
+  dropout_rate: ${model.dropout}
+
+# compile model for faster training with pytorch 2.0
+torch_compile: False

@@ -67,7 +67,15 @@ class SinusoidalPositionalEncoding(nn.Module):
         return user_embeddings, valid_mask
 
 
-class LearnablePositionalEmbedding(L.LightningModule):
+class LearnablePositionalEmbedding(nn.Module):
+    """
+    可学习的位置编码
+    
+    注意: 这里继承 nn.Module 而不是 LightningModule,因为:
+    1. 这只是一个简单的组件模块,不需要定义训练流程
+    2. LightningModule 是用于定义完整的训练逻辑(training_step, validation_step等)
+    3. 使用 nn.Module 更轻量,避免不必要的开销
+    """
     def __init__(
         self,
         max_sequence_len: int,
@@ -150,8 +158,8 @@ def run_example():
         max_sequence_len=max_seq_len, embedding_dim=embedding_dim, dropout_rate=dropout_rate
     )
 
-    # 前向传播 (注意参数顺序: past_embeddings, past_ids)
-    output_fixed, mask_fixed = sinusoidal_model(past_embeddings, past_ids)
+    # 前向传播 (注意参数顺序: past_ids, past_embeddings)
+    output_fixed, mask_fixed = sinusoidal_model(past_ids, past_embeddings)
 
     print(f"输入 Embeddings shape: {past_embeddings.shape}")
     print(f"输出 Embeddings shape: {output_fixed.shape}")

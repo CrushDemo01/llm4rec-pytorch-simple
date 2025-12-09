@@ -3,14 +3,10 @@ from typing import Any
 import hydra
 import lightning as L
 import torch
-from omegaconf import DictConfig,OmegaConf
+import torchmetrics
+from omegaconf import DictConfig
 from llm4rec_pytorch_simple.data.rec_dataset import RecoDataModule
-from llm4rec_pytorch_simple.models.archs.SASRec import SASRec
-from llm4rec_pytorch_simple.models.embeddings.embeddings import LocalEmbedding
-from llm4rec_pytorch_simple.models.losses.losses import BCELoss
-from llm4rec_pytorch_simple.models.metrics.metrics import RetrievalMetrics
-from llm4rec_pytorch_simple.models.negative_samples.negative_samples import LocalNegativeSamples
-from llm4rec_pytorch_simple.models.pre_processors.positional_emb import SinusoidalPositionalEncoding
+from llm4rec_pytorch_simple.models.embeddings.embeddings import EmbeddingModule
 from llm4rec_pytorch_simple.utils.pylogger import RankedLogger
 
 logger = RankedLogger(__name__)
@@ -83,14 +79,14 @@ class GenerativeRecommenders(L.LightningModule):
     ) -> None:
         if datamodule is not None:
             self.datamodule: RecoDataModule = hydra.utils.instantiate(datamodule)
-        self.embedding: LocalEmbedding = hydra.utils.instantiate(embedding)
-        self.negative_sampler: LocalNegativeSamples = hydra.utils.instantiate(negative_sampler)
+        self.embedding: EmbeddingModule = hydra.utils.instantiate(embedding)
+        self.negative_sampler: torch.nn.Module = hydra.utils.instantiate(negative_sampler)
         # 设置 negative_sampler 的 embedding 层
         self.negative_sampler._item_emb = self.embedding.embeddings
-        self.sequence_model: SASRec = hydra.utils.instantiate(sequence_model)
-        self.loss: BCELoss = hydra.utils.instantiate(loss)
-        self.metrics: RetrievalMetrics = hydra.utils.instantiate(metrics)
-        self.positional_emb: SinusoidalPositionalEncoding = hydra.utils.instantiate(positional_emb)
+        self.sequence_model: torch.nn.Module = hydra.utils.instantiate(sequence_model)
+        self.loss: torch.nn.Module = hydra.utils.instantiate(loss)
+        self.metrics: torchmetrics.Metric = hydra.utils.instantiate(metrics)
+        self.positional_emb: torch.nn.Module = hydra.utils.instantiate(positional_emb)
 
     def setup(self, stage: str) -> None:
         # 设置数据集，根据训练、验证或测试阶段加载数据，在fit, test, predict 等都会自动调用

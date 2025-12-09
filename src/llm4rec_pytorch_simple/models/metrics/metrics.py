@@ -51,8 +51,8 @@ class RetrievalMetrics(torchmetrics.Metric):
         """
         计算所有指标。
         """
-        all_preds = torchmetrics.utilities.dim_zero_cat(self.top_k_ids)
-        all_targets = torchmetrics.utilities.dim_zero_cat(self.target_ids)
+        all_preds = torchmetrics.utilities.dim_zero_cat(self.top_k_ids) # torch.Size([64, 200])
+        all_targets = torchmetrics.utilities.dim_zero_cat(self.target_ids) # torch.Size([64, 1])
 
         # 2. 计算排名 (Ranking Logic)
         # 技巧：把 target 拼接到 pred 的最后一位。
