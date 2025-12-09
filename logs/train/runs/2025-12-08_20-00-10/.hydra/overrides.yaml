@@ -1,0 +1,2 @@
+- trainer=gpu
+- logger=csv
