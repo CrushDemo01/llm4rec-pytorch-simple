@@ -1,0 +1,143 @@
+model:
+  _target_: llm4rec_pytorch_simple.models.retrieval_module.RetrievalModule
+  item_embedding_dim: 50
+  dropout: 0.2
+  gr_output_length: 1
+  embedding:
+    _target_: llm4rec_pytorch_simple.models.embeddings.embeddings.LocalEmbedding
+    num_items: ${data.num_items}
+    embedding_dim: ${model.item_embedding_dim}
+    padding_idx: 0
+  negative_sampler:
+    _target_: llm4rec_pytorch_simple.models.negative_samples.negative_samples.LocalNegativeSamples
+    num_items: ${data.num_items}
+  sequence_model:
+    _target_: llm4rec_pytorch_simple.models.archs.HSTU.HSTUModel
+    max_sequence_len: ${eval:${data.max_sequence_length} + ${model.gr_output_length}}
+    embedding_dim: ${model.item_embedding_dim}
+    num_blocks: 2
+    num_heads: 1
+    attention_dim: ${model.item_embedding_dim}
+    linear_hidden_dim: ${model.item_embedding_dim}
+    activation_fn: SiLU
+    dropout: ${model.dropout}
+    eps: 1.0e-06
+  loss:
+    _target_: llm4rec_pytorch_simple.models.losses.losses.BCELoss
+    num_to_sample: 128
+  metrics:
+    _target_: llm4rec_pytorch_simple.models.metrics.metrics.RetrievalMetrics
+    topk: 200
+    at_k_list:
+    - 10
+    - 50
+    - 100
+    - 200
+  optimizer:
+    _target_: torch.optim.AdamW
+    _partial_: true
+    lr: 0.001
+    betas:
+    - 0.9
+    - 0.999
+    eps: 1.0e-08
+    weight_decay: 0.01
+    amsgrad: false
+  scheduler:
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    _partial_: true
+    T_max: 50
+    eta_min: 1.0e-05
+    last_epoch: -1
+  lr_monitor_metric: val/hr@10
+  positional_emb:
+    _target_: llm4rec_pytorch_simple.models.pre_processors.positional_emb.LearnablePositionalEmbedding
+    max_sequence_len: ${eval:${data.max_sequence_length} + ${model.gr_output_length}}
+    embedding_dim: ${model.item_embedding_dim}
+    dropout_rate: ${model.dropout}
+  torch_compile: false
+model/params/total: 229450
+model/params/trainable: 229450
+model/params/non_trainable: 0
+data:
+  _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataModule
+  max_hash_ranges:
+    genres: 63
+    title: 16383
+    year: 511
+  data_path: ${paths.data_dir}
+  max_jagged_dimension: 16
+  max_sequence_length: 200
+  num_items: 3883
+  batch_size: 32
+  sample_ratio: 1.0
+  num_workers: 4
+  prefetch_factor: 4
+  persistent_workers: true
+  split_mode: user_id
+  train_dataset:
+    _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataset
+    ratings_file: ${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_train_data.csv
+    ignore_last_n: 0
+  val_dataset:
+    _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataset
+    ratings_file: ${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_test_data.csv
+    ignore_last_n: 0
+  test_dataset:
+    _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataset
+    ratings_file: ${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_test_data.csv
+    ignore_last_n: 0
+trainer:
+  _target_: lightning.pytorch.trainer.Trainer
+  default_root_dir: ${paths.output_dir}
+  min_epochs: 1
+  max_epochs: 1000
+  accelerator: mps
+  devices: 1
+  check_val_every_n_epoch: 10
+  deterministic: false
+callbacks:
+  model_checkpoint:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    dirpath: ${paths.output_dir}/checkpoints
+    filename: epoch_{epoch:03d}
+    monitor: val/hr@10
+    verbose: false
+    save_last: true
+    save_top_k: 1
+    mode: max
+    auto_insert_metric_name: false
+    save_weights_only: false
+    every_n_train_steps: null
+    train_time_interval: null
+    every_n_epochs: null
+    save_on_train_epoch_end: null
+  early_stopping:
+    _target_: lightning.pytorch.callbacks.EarlyStopping
+    monitor: val/hr@10
+    min_delta: 0.0
+    patience: 100
+    verbose: false
+    mode: max
+    strict: true
+    check_finite: true
+    stopping_threshold: null
+    divergence_threshold: null
+    check_on_train_epoch_end: null
+  model_summary:
+    _target_: lightning.pytorch.callbacks.RichModelSummary
+    max_depth: -1
+  rich_progress_bar:
+    _target_: llm4rec_pytorch_simple.utils.rich_utils.CustomRichProgressBar
+  learning_rate_monitor:
+    _target_: lightning.pytorch.callbacks.LearningRateMonitor
+    logging_interval: step
+extras:
+  ignore_warnings: false
+  enforce_tags: true
+  print_config: true
+task_name: train
+tags:
+- dev
+ckpt_path: null
+seed: null
