@@ -1,0 +1,226 @@
+_wandb:
+    value:
+        cli_version: 0.23.1
+        e:
+            830a1f0miq8ajcdizgzeiunsnlnxfrhx:
+                apple:
+                    ecpuCores: 6
+                    gpuCores: 10
+                    memoryGb: 24
+                    name: Apple M4
+                    pcpuCores: 4
+                    ramTotalBytes: "25769803776"
+                    swapTotalBytes: "5368709120"
+                args:
+                    - trainer.max_epochs=2
+                    - data.batch_size=128
+                    - logger.wandb.name=test-batch128
+                codePath: src/llm4rec_pytorch_simple/scripts/train.py
+                codePathLocal: src/llm4rec_pytorch_simple/scripts/train.py
+                cpu_count: 10
+                cpu_count_logical: 10
+                disk:
+                    /:
+                        total: "494384795648"
+                        used: "331371012096"
+                email: 480843101@qq.com
+                executable: /Users/yyds/workspace/REC/llm4rec-pytorch-simple/.venv/bin/python3
+                git:
+                    commit: c1311f510fb8762a74a41cfe0aeef9bd72c5ed47
+                    remote: git@github.com:CrushDemo01/llm4rec-pytorch-simple.git
+                host: yydsdeMacBook-Air.local
+                memory:
+                    total: "25769803776"
+                os: macOS-15.7.2-arm64-arm-64bit
+                program: /Users/yyds/workspace/REC/llm4rec-pytorch-simple/src/llm4rec_pytorch_simple/scripts/train.py
+                python: CPython 3.10.14
+                root: /Users/yyds/workspace/REC/llm4rec-pytorch-simple/logs/train/runs/2025-12-12_23-39-48
+                startedAt: "2025-12-12T15:39:53.276109Z"
+                writerId: 830a1f0miq8ajcdizgzeiunsnlnxfrhx
+        m:
+            - "1": trainer/global_step
+              "6":
+                - 3
+              "7": []
+            - "2": '*'
+              "5": 1
+              "6":
+                - 1
+              "7": []
+        python_version: 3.10.14
+        t:
+            "1":
+                - 1
+                - 41
+                - 50
+                - 106
+            "2":
+                - 1
+                - 41
+                - 50
+                - 106
+            "3":
+                - 2
+                - 7
+                - 13
+                - 15
+                - 66
+            "4": 3.10.14
+            "5": 0.23.1
+            "12": 0.23.1
+            "13": darwin-arm64
+callbacks:
+    value:
+        early_stopping:
+            _target_: lightning.pytorch.callbacks.EarlyStopping
+            check_finite: true
+            check_on_train_epoch_end: null
+            divergence_threshold: null
+            min_delta: 0
+            mode: max
+            monitor: val/hr@10
+            patience: 100
+            stopping_threshold: null
+            strict: true
+            verbose: false
+        learning_rate_monitor:
+            _target_: lightning.pytorch.callbacks.LearningRateMonitor
+            logging_interval: step
+        model_checkpoint:
+            _target_: lightning.pytorch.callbacks.ModelCheckpoint
+            auto_insert_metric_name: false
+            dirpath: ${paths.output_dir}/checkpoints
+            every_n_epochs: null
+            every_n_train_steps: null
+            filename: epoch_{epoch:03d}
+            mode: max
+            monitor: val/hr@10
+            save_last: true
+            save_on_train_epoch_end: null
+            save_top_k: 1
+            save_weights_only: false
+            train_time_interval: null
+            verbose: false
+        model_summary:
+            _target_: lightning.pytorch.callbacks.RichModelSummary
+            max_depth: -1
+        rich_progress_bar:
+            _target_: llm4rec_pytorch_simple.utils.rich_utils.CustomRichProgressBar
+ckpt_path:
+    value: null
+data:
+    value:
+        _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataModule
+        batch_size: 128
+        data_path: ${paths.data_dir}
+        max_hash_ranges:
+            genres: 63
+            title: 16383
+            year: 511
+        max_jagged_dimension: 16
+        max_sequence_length: 200
+        num_items: 3883
+        num_workers: 4
+        persistent_workers: true
+        prefetch_factor: 4
+        sample_ratio: 1
+        split_mode: user_id
+        test_dataset:
+            _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataset
+            ignore_last_n: 0
+            ratings_file: ${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_test_data.csv
+        train_dataset:
+            _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataset
+            ignore_last_n: 0
+            ratings_file: ${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_train_data.csv
+        val_dataset:
+            _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataset
+            ignore_last_n: 0
+            ratings_file: ${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_test_data.csv
+extras:
+    value:
+        enforce_tags: true
+        ignore_warnings: false
+        print_config: true
+model:
+    value:
+        _target_: llm4rec_pytorch_simple.models.retrieval_module.RetrievalModule
+        dropout: 0.2
+        embedding:
+            _target_: llm4rec_pytorch_simple.models.embeddings.embeddings.LocalEmbedding
+            embedding_dim: ${model.item_embedding_dim}
+            num_items: ${data.num_items}
+            padding_idx: 0
+        gr_output_length: 1
+        item_embedding_dim: 50
+        loss:
+            _target_: llm4rec_pytorch_simple.models.losses.losses.BCELoss
+            num_to_sample: 128
+        lr_monitor_metric: val/hr@10
+        metrics:
+            _target_: llm4rec_pytorch_simple.models.metrics.metrics.RetrievalMetrics
+            at_k_list:
+                - 10
+                - 50
+                - 100
+                - 200
+            topk: 200
+        negative_sampler:
+            _target_: llm4rec_pytorch_simple.models.negative_samples.negative_samples.LocalNegativeSamples
+            num_items: ${data.num_items}
+        optimizer:
+            _partial_: true
+            _target_: torch.optim.AdamW
+            amsgrad: false
+            betas:
+                - 0.9
+                - 0.999
+            eps: 1e-08
+            lr: 0.001
+            weight_decay: 0.01
+        positional_emb:
+            _target_: llm4rec_pytorch_simple.models.pre_processors.positional_emb.LearnablePositionalEmbedding
+            dropout_rate: ${model.dropout}
+            embedding_dim: ${model.item_embedding_dim}
+            max_sequence_len: ${eval:${data.max_sequence_length} + ${model.gr_output_length}}
+        scheduler:
+            _partial_: true
+            _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+            T_max: 50
+            eta_min: 1e-05
+            last_epoch: -1
+        sequence_model:
+            _target_: llm4rec_pytorch_simple.models.archs.HSTU.HSTUModel
+            activation_fn: SiLU
+            attention_dim: ${model.item_embedding_dim}
+            dropout: ${model.dropout}
+            embedding_dim: ${model.item_embedding_dim}
+            eps: 1e-06
+            linear_hidden_dim: ${model.item_embedding_dim}
+            max_sequence_len: ${eval:${data.max_sequence_length} + ${model.gr_output_length}}
+            num_blocks: 2
+            num_heads: 1
+        torch_compile: false
+model/params/non_trainable:
+    value: 0
+model/params/total:
+    value: 229450
+model/params/trainable:
+    value: 229450
+seed:
+    value: null
+tags:
+    value:
+        - dev
+task_name:
+    value: train
+trainer:
+    value:
+        _target_: lightning.pytorch.trainer.Trainer
+        accelerator: gpu
+        check_val_every_n_epoch: 10
+        default_root_dir: ${paths.output_dir}
+        deterministic: false
+        devices: 1
+        max_epochs: 2
+        min_epochs: 1

@@ -1,0 +1,42 @@
+{
+  "os": "macOS-15.7.2-arm64-arm-64bit",
+  "python": "CPython 3.10.14",
+  "startedAt": "2025-12-12T15:39:53.276109Z",
+  "args": [
+    "trainer.max_epochs=2",
+    "data.batch_size=128",
+    "logger.wandb.name=test-batch128"
+  ],
+  "program": "/Users/yyds/workspace/REC/llm4rec-pytorch-simple/src/llm4rec_pytorch_simple/scripts/train.py",
+  "codePath": "src/llm4rec_pytorch_simple/scripts/train.py",
+  "codePathLocal": "src/llm4rec_pytorch_simple/scripts/train.py",
+  "git": {
+    "remote": "git@github.com:CrushDemo01/llm4rec-pytorch-simple.git",
+    "commit": "c1311f510fb8762a74a41cfe0aeef9bd72c5ed47"
+  },
+  "email": "480843101@qq.com",
+  "root": "/Users/yyds/workspace/REC/llm4rec-pytorch-simple/logs/train/runs/2025-12-12_23-39-48",
+  "host": "yydsdeMacBook-Air.local",
+  "executable": "/Users/yyds/workspace/REC/llm4rec-pytorch-simple/.venv/bin/python3",
+  "cpu_count": 10,
+  "cpu_count_logical": 10,
+  "disk": {
+    "/": {
+      "total": "494384795648",
+      "used": "331371012096"
+    }
+  },
+  "memory": {
+    "total": "25769803776"
+  },
+  "apple": {
+    "name": "Apple M4",
+    "ecpuCores": 6,
+    "pcpuCores": 4,
+    "gpuCores": 10,
+    "memoryGb": 24,
+    "swapTotalBytes": "5368709120",
+    "ramTotalBytes": "25769803776"
+  },
+  "writerId": "830a1f0miq8ajcdizgzeiunsnlnxfrhx"
+}

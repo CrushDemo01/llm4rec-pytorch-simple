@@ -18,6 +18,8 @@ dependencies = [
     "rich>=13.7.1",
     "numpy>=1.26.4,<2.0.0",
     "pandas>=2.3.3",
+    # --------- experiment tracking --------- #
+    "wandb>=0.18.0",
 ]
 classifiers = [
     "Intended Audience :: Developers",
