@@ -1,0 +1,5 @@
+- trainer=gpu
+- logger=csv
+- model=HSTU
+- data.batch_size=16
+- model.loss.num_to_sample=1

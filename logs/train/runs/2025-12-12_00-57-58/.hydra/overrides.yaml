@@ -1,0 +1,4 @@
+- trainer=gpu
+- logger=csv
+- model=HSTU_SampleSoftmax
+- data.batch_size=32

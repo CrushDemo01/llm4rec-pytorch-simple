@@ -8,11 +8,6 @@ from llm4rec_pytorch_simple.utils.pylogger import RankedLogger
 
 logger = RankedLogger(__name__)
 
-
-class PositionalEmbedding(nn.Module):
-    pass
-
-
 class SinusoidalPositionalEncoding(nn.Module):
     """
     'Attention Is All You Need' 中的固定正余弦位置编码

@@ -1,3 +1,0 @@
-- trainer=gpu
-- logger=csv
-- data.num_items=3884

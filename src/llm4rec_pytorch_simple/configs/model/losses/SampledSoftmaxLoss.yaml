@@ -1,0 +1,2 @@
+_target_: llm4rec_pytorch_simple.models.losses.losses.SampledSoftmaxLoss
+num_to_sample: 128

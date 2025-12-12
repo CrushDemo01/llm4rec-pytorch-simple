@@ -4,7 +4,7 @@ _target_: llm4rec_pytorch_simple.models.retrieval_module.RetrievalModule
 item_embedding_dim: 50             # 嵌入维度
 dropout: 0.2                  # Dropout 比率
 # 生成式推荐的输出序列长度，最短是 1
-gr_output_length: 10
+gr_output_length: 1
 
 embedding:
   _target_: llm4rec_pytorch_simple.models.embeddings.embeddings.LocalEmbedding

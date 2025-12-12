@@ -28,11 +28,8 @@ class LocalNegativeSamples(torch.nn.Module):
 
         # 3. 防撞车逻辑 (Collision Check)
         # 为了比较 neg_ids 和 target_ids，需要对齐维度
-        if num_to_sample > 1:
-            # positive: [B, L] -> [B, L, 1] -> 广播成 [B, L, K]
-            positive_expanded = positive_ids.unsqueeze(-1).expand_as(neg_ids)
-        else:
-            positive_expanded = positive_ids
+        # positive: [..., L] -> [..., L, 1] -> 广播成 [..., L, K]
+        positive_expanded = positive_ids.unsqueeze(-1).expand_as(neg_ids)
 
         mask = neg_ids == positive_expanded  # 找到撞车的位置
         if mask.any():

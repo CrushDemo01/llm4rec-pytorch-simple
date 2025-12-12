@@ -1,0 +1,3 @@
+- trainer=gpu
+- logger=csv
+- model=HSTU

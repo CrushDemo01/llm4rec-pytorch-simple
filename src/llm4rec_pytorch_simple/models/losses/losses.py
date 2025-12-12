@@ -59,6 +59,45 @@ class BCELoss(torch.nn.Module):
         loss = weighted_losses.sum() / supervision_mask.sum()
         return loss
 
+
+class SampledSoftmaxLoss(torch.nn.Module):
+    def __init__(self, num_to_sample: int = 100, **kwargs):
+        super().__init__()
+        self.name = "SampledSoftmaxLoss"
+        self.num_to_sample = num_to_sample
+
+    def forward(
+        self,
+        negatives_sampler: LocalNegativeSamples,
+        output_embeddings: torch.Tensor,
+        pos_embeddings: torch.Tensor,
+        positive_ids: torch.Tensor,
+        supervision_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Sampled softmax：拼接1个正样本与K个负样本的logits，做交叉熵。"""
+        _sampled_ids, sampled_negative_embeddings = negatives_sampler(
+            positive_ids=positive_ids,
+            num_to_sample=self.num_to_sample,
+        )
+
+        pos_scores = (output_embeddings * pos_embeddings).sum(dim=-1, keepdim=True)  # [..., 1]
+        output_embeddings_expanded = output_embeddings.unsqueeze(-2)  # [..., 1, D]
+        neg_scores = (output_embeddings_expanded * sampled_negative_embeddings).sum(dim=-1)  # [..., K]
+
+        logits = torch.cat([pos_scores, neg_scores], dim=-1)  # [..., K+1]
+        labels = torch.zeros_like(pos_scores, dtype=torch.long)  # 正样本放在索引0
+
+        logits_flat = logits.reshape(-1, logits.shape[-1])
+        labels_flat = labels.reshape(-1)
+        mask_flat = supervision_mask.reshape(-1)
+
+        token_loss = F.cross_entropy(logits_flat, labels_flat, reduction="none")
+        token_loss = token_loss * mask_flat
+
+        denom = mask_flat.sum()
+        loss = token_loss.sum() / denom
+        return loss
+
 # 网络权重正则化 loss-l2 范数
 class L2RegularizationLoss(torch.nn.Module):
     def __init__(self, model, weight_decay):
