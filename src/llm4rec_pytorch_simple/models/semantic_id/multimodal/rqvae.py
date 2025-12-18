@@ -1,0 +1,184 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Tuple, List
+
+class ResidualQuantizer(nn.Module):
+    def __init__(self, num_codebooks: int, codebook_size: int, code_dim: int, distance_mode: str = 'l2'):
+        super().__init__()
+        self.num_codebooks = num_codebooks
+        self.codebook_size = codebook_size
+        self.code_dim = code_dim
+        self.distance_mode = distance_mode
+        
+        # 码本: (D, K, C)   torch.Size([2, 64, 32])
+        self.codebooks = nn.Parameter(torch.randn(num_codebooks, codebook_size, code_dim))
+
+    def forward(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        参数:
+            z: 输入张量 (batch_size, code_dim) 或 (batch_size, seq_len, code_dim)
+        返回:
+            z_q: 量化后的张量 (与 z 形状相同)
+            codes: 索引 (batch_size, num_codebooks)
+            commit_loss: 承诺损失
+            codebook_loss: 码本损失
+        """
+        batch_size = z.shape[0]
+        z_q = torch.zeros_like(z)   # torch.Size([10, 32])
+        residual = z
+        
+        codes = []
+        commit_loss = 0.0
+        codebook_loss = 0.0
+        
+        for i in range(self.num_codebooks):
+            # 寻找最近邻
+            # residual: (B, C)
+            # codebook[i]: (K, C)
+            # Dist: (B, K)
+            codebook = self.codebooks[i]    # torch.Size([64, 32])
+            
+            
+            # 计算距离:
+            if self.distance_mode.lower() == 'l2':
+                # |x-y|^2 = |x|^2 + |y|^2 - 2xy
+                dists = (
+                    torch.sum(residual**2, dim=1, keepdim=True) +  # (10, 1)
+                    torch.sum(codebook**2, dim=1) -                # (64,)
+                    2 * torch.matmul(residual, codebook.t())       # (10, 64)
+                )
+            elif self.distance_mode.lower() == 'cos':
+                # cos(x,y) = (x.y) / (|x||y|)
+                # 归一化后计算余弦相似度，转换为距离
+                residual_norm = F.normalize(residual, p=2, dim=1)      # (B, C)
+                codebook_norm = F.normalize(codebook, p=2, dim=1)      # (K, C)
+                dists = - torch.matmul(residual_norm, codebook_norm.t())  # (B, K)
+            else:
+                raise ValueError(f"Unsupported distance mode: {self.distance_mode}")
+            
+            # 获取索引
+            indices = torch.argmin(dists, dim=1)  # torch.Size([10]) B
+            codes.append(indices)
+            
+            # 获取量化值
+            z_q_i = codebook[indices]  # (B, C) - 直接索引更简洁
+
+            # 注意: 标准 VQ-VAE 损失有两部分:
+            # 损失 1: 码本损失 ||sg[z] - e||²
+                # - 让码本向量 e 靠近编码器输出 z
+                # - sg[z] 意味着梯度不回传到编码器，只更新码本
+            # 损失 2: 承诺损失 ||z - sg[e]||²
+                # - 让编码器输出 z 靠近码本向量 e
+                # - sg[e] 意味着梯度不回传到码本，只更新编码器
+            
+            # 码本损失：让码本向量靠近编码器输出（不回传到编码器）
+            codebook_loss += F.mse_loss(z_q_i, residual.detach())
+            
+            # 承诺损失：让编码器输出靠近码本向量（不回传到码本）
+            commit_loss += F.mse_loss(z_q_i.detach(), residual)
+            
+            # 更新残差
+            residual = residual - z_q_i
+            z_q = z_q + z_q_i   # 累加量化结果
+        # codes是torch.Size([10])，两个，从dim=1堆叠，得到 torch.Size([10, 2])
+        codes = torch.stack(codes, dim=1)  # (B, num_codebooks) torch.Size([10, 2])
+        
+        # 直通估计器
+        """
+        # 展开
+        z_q_new = z + (z_q - z)  # detach 在前向传播中不影响值
+                = z + z_q - z
+                = z_q  # ✅ 前向传播使用量化后的值
+
+        # 梯度计算
+        ∂L/∂z = ∂L/∂z_q_new * ∂z_q_new/∂z
+        # 因为 z_q_new = z + (z_q - z).detach()
+        # (z_q - z).detach() 的梯度为 0
+        ∂z_q_new/∂z = 1 + 0 = 1  # ✅ 梯度直接传递
+        # 所以
+        ∂L/∂z = ∂L/∂z_q_new  # 梯度完全相同，"直通"了！
+        """
+        z_q = z + (z_q - z).detach()    # 将 z_q - z 的梯度设为 0
+
+        return z_q, codes, commit_loss, codebook_loss
+
+class RQVAE(nn.Module):
+    def __init__(
+        self, 
+        input_dim: int = 256,  # 从 896 更新为 256 (128+128)
+        hidden_dim: List[int] = [512],
+        code_dim: int = 128,  # 从 256 更新为 128
+        num_codebooks: int = 3, 
+        codebook_size: int = 256,
+        dropout: float = 0.1
+    ):
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.code_dim = code_dim
+        
+        # 编码器
+        dims = [self.input_dim] + self.hidden_dim + [self.code_dim]
+        encoder_layers = []
+        for i in range(len(dims) - 1):
+            encoder_layers.append(nn.Linear(dims[i], dims[i+1]))
+            if i < len(dims) - 2:  # 最后一层不加 normalization 和 dropout
+                encoder_layers.append(nn.LayerNorm(dims[i+1]))
+                encoder_layers.append(nn.GELU())
+                encoder_layers.append(nn.Dropout(dropout))
+        self.encoder = nn.Sequential(*encoder_layers)
+        
+        # 量化器
+        self.quantizer = ResidualQuantizer(num_codebooks, codebook_size, code_dim)
+        
+        # 解码器
+        dims_reversed = dims[::-1]
+        decoder_layers = []
+        for i in range(len(dims_reversed) - 1):
+            decoder_layers.append(nn.Linear(dims_reversed[i], dims_reversed[i+1]))
+            if i < len(dims_reversed) - 2:  # 最后一层不加 normalization 和 dropout
+                decoder_layers.append(nn.LayerNorm(dims_reversed[i+1]))
+                decoder_layers.append(nn.GELU())
+                decoder_layers.append(nn.Dropout(dropout))
+        self.decoder = nn.Sequential(*decoder_layers)
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        参数:
+            x: 输入特征 (batch_size, input_dim)
+        返回:
+            codes: 离散编码
+            x_recon: 重构特征
+            commit_loss: 承诺损失
+            codebook_loss: 码本损失
+        """
+        z = self.encoder(x)
+        z_q, codes, commit_loss, codebook_loss = self.quantizer(z)
+        x_recon = self.decoder(z_q)
+        return codes, x_recon, commit_loss, codebook_loss
+
+if __name__ == "__main__":
+    # 测试
+    print("Testing RQVAE...")
+    emd_dim = 32
+    x = torch.randn(10, emd_dim)
+    
+    model = RQVAE(
+        input_dim=32,           # 你的 PCA 降维维度
+        hidden_dim=[32],
+        code_dim=32,          # 与输入维度相同或稍大即可
+        num_codebooks=2,        # 2 层足够：64^2 = 4096 > 3884
+        codebook_size=64,       # 降低到 64：64^2 = 4096
+    )
+    
+    codes, x_recon, commit_loss, codebook_loss = model(x)
+    
+    print(f"Input shape: {x.shape}")
+    print(f"Recon shape: {x_recon.shape}")
+    print(f"Codes shape: {codes.shape}")
+    print(f"Commit loss: {commit_loss.item()}")
+    print(f"Codebook loss: {codebook_loss.item()}")
+    
+    assert x_recon.shape == x.shape
+    assert codes.shape == (10, 2)

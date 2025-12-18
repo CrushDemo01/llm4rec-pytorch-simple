@@ -2,7 +2,7 @@
 *.pth
 
 docs/source
-
+multimodal_datasets/
 
 *.dat
 

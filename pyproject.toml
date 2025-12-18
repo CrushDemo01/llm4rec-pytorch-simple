@@ -20,6 +20,8 @@ dependencies = [
     "pandas>=2.3.3",
     # --------- experiment tracking --------- #
     "wandb>=0.18.0",
+    "pyarrow>=21.0.0",
+    "ipython>=8.18.1",
 ]
 classifiers = [
     "Intended Audience :: Developers",
