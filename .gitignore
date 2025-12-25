@@ -2,7 +2,8 @@
 *.pth
 
 docs/source
-multimodal_datasets/
+# multimodal_datasets/
+ml-1m/multimodal_datasets/image/
 
 *.dat
 

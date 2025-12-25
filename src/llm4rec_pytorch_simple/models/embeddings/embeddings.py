@@ -1,8 +1,8 @@
 import abc
-from typing import Optional
+from typing import Optional, Dict
 
 import torch
-
+import torch.nn as nn
 from llm4rec_pytorch_simple.models.embeddings.topk import MIPSBruteForceTopK
 from llm4rec_pytorch_simple.utils.pylogger import RankedLogger
 
@@ -21,11 +21,9 @@ class EmbeddingModule(torch.nn.Module):
         self.register_buffer("_ids", torch.as_tensor(ids).unsqueeze(0))
         self.top_k_module = top_k_module
 
-    @abc.abstractmethod
     def get_item_embeddings(self, item_ids: torch.Tensor) -> torch.Tensor:
         pass
 
-    @abc.abstractmethod
     def get_item_embeddings_t(self) -> torch.Tensor:
         """获取转置的 embedding 权重（用于检索）"""
         pass
@@ -186,6 +184,61 @@ class LocalEmbedding(EmbeddingModule):
             shape: (embedding_dim, num_items)
         """
         return self.embeddings.weight[1:].T
+
+
+class SemanticEmbedding(nn.Module):
+    def __init__(self, codebook_size: int, sem_id_dim: int, embedding_dim: int):
+        super().__init__()
+        self.codebook_size = codebook_size
+        self.sem_id_dim = sem_id_dim
+        self.embedding_dim = embedding_dim
+        self.padding_idx = sem_id_dim * codebook_size   # 也就是每个的起点
+
+        self.embeddings = nn.Embedding(
+                num_embeddings=codebook_size,
+                embedding_dim=embedding_dim,
+                padding_idx=self.padding_idx,
+            )
+    
+    def forward(self, batch: Dict) -> torch.Tensor:
+        """Perform a single forward pass through the network.
+
+        :param batch: The input batch.
+        :return: A tensor of embeddings.
+        """
+        token_type_ids = batch['token_type_ids']
+        post_sem_ids = batch['post_sem_ids']
+        post_sem_mask = batch['post_sem_mask']
+        # 示例：假设 num_embeddings=1024, sem_id_dim=3
+        # token_type_id=0, sem_id=42  => global_id = 0*1024 + 42  = 42
+        # token_type_id=1, sem_id=42  => global_id = 1*1024 + 42  = 1066
+        # token_type_id=2, sem_id=42  => global_id = 2*1024 + 42  = 2090
+
+        post_sem_ids = token_type_ids * self.codebook_size + post_sem_ids
+        post_sem_ids[~post_sem_mask] = self.padding_idx
+        post_sem_ids = self.embeddings(post_sem_ids)
+
+        # ========== Step 3: 处理未来序列（目标序列） ==========
+        if batch["target_sem_ids"] is not None:
+            # 同样的组合逻辑应用于目标序列
+            target_sem_ids = batch.token_type_ids_fut * self.codebook_size + batch.target_sem_ids
+            target_sem_ids = self.embeddings(target_sem_ids)
+        else:
+            # 生成模式：没有目标序列
+            target_sem_ids = None
+
+        return post_sem_ids, target_sem_ids
+
+
+class UserIdEmbedding(nn.Module):
+    def __init__(self, num_users: int, embedding_dim: int):
+        super().__init__()
+        self.num_users = num_users
+        self.embedding_dim = embedding_dim
+        self.embeddings = nn.Embedding(num_users + 1, embedding_dim, padding_idx=0)
+
+    def forward(self, user_ids: torch.Tensor) -> torch.Tensor:
+        return self.embeddings(user_ids)
 
 
 # ==================== 测试函数 ====================

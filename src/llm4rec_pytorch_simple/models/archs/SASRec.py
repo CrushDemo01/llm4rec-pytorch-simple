@@ -76,7 +76,7 @@ class SASRec(nn.Module):
     def forward(self, user_embeddings: torch.Tensor, past_ids: torch.Tensor):
         """
         Args:
-            user_embeddings: (Batch, Seq_Len, Dim) 经过位置编码后的用户嵌入
+            user_embeddings: (Batch, Seq_Len, Dim) 经过位置编码后的用户嵌入,就是序列 embedding
             past_ids: (Batch, Seq_Len) 用户历史行为序列 ID (用于生成 padding mask)
         Returns:
             output: (Batch, Seq_Len, Dim) Transformer 编码后的序列表示

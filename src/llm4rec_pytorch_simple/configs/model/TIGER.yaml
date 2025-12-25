@@ -1,0 +1,91 @@
+_target_: llm4rec_pytorch_simple.models.RqvaeRetrievalModule
+
+# 模型架构相关
+model_att_emb_dim: 50           # 模型接受的 输入 item embedding 维度
+dropout: 0.1                      # Dropout 比率
+# 生成式推荐的输出序列长度（等于 Semantic ID 长度）
+gr_output_length: 1
+
+# Semantic ID 配置
+semantic_id_config:
+  _target_: llm4rec_pytorch_simple.models.semantic_id.SemanticIdTokenizer
+  rqvae_cfg:
+    _target_: llm4rec_pytorch_simple.models.semantic_id.RQVAE
+    input_dim: 32           # 你的 PCA 降维维度
+    hidden_dim: [128]
+    code_dim: 50          # 与输入维度相同或稍大即可
+    num_codebooks: 3        # 2 层足够：32^3 = 4096 > 3884
+    codebook_size: 32
+
+  id_length: ${model.gr_output_length} # Semantic ID 长度（改为2，容量=64^2=4096）
+  codebook_size: 64               # 每个位置的词汇表大小（改为64，适合3706个items）
+  mapping_file: null              # 映射表文件路径（null 表示使用简单映射）
+
+# 用户id
+user_id_embedding:
+  _target_: llm4rec_pytorch_simple.models.embeddings.embeddings.UserIdEmbedding
+  embedding_dim: ${model.model_att_emb_dim}
+
+# 语义 id embedding
+semantic_id_embedding:
+  _target_: llm4rec_pytorch_simple.models.embeddings.embeddings.SemanticEmbedding
+  codebook_size: 32
+  sem_id_dim: 50
+  embedding_dim: ${model.model_att_emb_dim}
+
+# 位置编码配置
+# 注意：只用于 encoder 的历史序列
+positional_embedding:
+  _target_: llm4rec_pytorch_simple.models.pre_processors.positional_emb.LearnablePositionalEmbedding
+  max_sequence_len: ${data.max_sequence_length}
+  embedding_dim: ${model.model_att_emb_dim}
+  dropout_rate: ${model.dropout}
+negative_sampler:
+  _target_: llm4rec_pytorch_simple.models.negative_samples.negative_samples.LocalNegativeSamples
+  num_items: ${data.num_items}
+
+# 序列模型配置
+sequence_model:
+  _target_: llm4rec_pytorch_simple.models.archs.TIGER
+  max_sequence_len: ${data.max_sequence_length}     # 输入序列最大长度
+  max_output_len: ${model.semantic_id_config.id_length}  # 输出 Semantic ID 最大长度
+  vocab_size: ${model.semantic_id_config.codebook_size}  # Semantic ID 词汇表大小 (codebook_size)
+  sid_embedding_dim: ${model.model_att_emb_dim}    # Semantic ID embedding 维度
+  embedding_dim: ${model.model_att_emb_dim}        # TIGER 内部 embedding 维度
+  num_encoder_blocks: 2                             # Encoder block 数量
+  num_decoder_blocks: 2                             # Decoder block 数量
+  num_heads: 2                                      # Attention head 数量 (50/2=25)
+  ffn_hidden_extend: 4                              # FFN 扩展倍数
+  dropout: ${model.dropout}
+
+loss:
+  _target_: llm4rec_pytorch_simple.models.losses.losses.BCELoss
+  num_to_sample: 128
+
+metrics:
+  _target_: llm4rec_pytorch_simple.models.metrics.metrics.RetrievalMetrics
+  topk: 200
+  at_k_list: [10, 50, 100, 200]
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 0.001                       # 提升学习率以加快收敛
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  weight_decay: 0.01
+  amsgrad: false
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  _partial_: true
+  T_max: 50              # 一个完整余弦周期内的 epoch 数
+  eta_min: 1.0e-5        # 最低学习率
+  last_epoch: -1         # 复现时可修改为最新 epoch
+
+# 学习率调度器监控的验证指标
+lr_monitor_metric: val/hr@10
+
+
+# compile model for faster training with pytorch 2.0
+torch_compile: False

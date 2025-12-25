@@ -3,7 +3,7 @@ import torch
 from llm4rec_pytorch_simple.models.generative_recommenders import GenerativeRecommenders
 from llm4rec_pytorch_simple.utils.features import get_current_embeddings_simple, seq_features_from_row
 from llm4rec_pytorch_simple.utils.pylogger import RankedLogger
-from omegaconf import DictConfig,OmegaConf
+from omegaconf import DictConfig, OmegaConf
 import hydra
 
 logger = RankedLogger(__name__)

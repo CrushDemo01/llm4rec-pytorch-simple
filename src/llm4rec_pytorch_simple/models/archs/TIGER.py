@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Optional
 
 
 
@@ -97,8 +98,12 @@ class TIGERDecoder(nn.Module):
         """
         生成因果遮罩，确保位置 i 只能看到 0...i 的信息
         上三角矩阵 (不含对角线) 为 True，表示被屏蔽
+
+        注意：实际 decoder 输入长度 = max_output_len + 1（包含 BOS）
         """
-        mask = torch.triu(torch.ones(self.max_output_len, self.max_output_len), diagonal=1).bool()
+        # causal_mask 大小需要包含 BOS token
+        mask_size = self.max_output_len + 1
+        mask = torch.triu(torch.ones(mask_size, mask_size), diagonal=1).bool()
         self.register_buffer("causal_mask", mask)
 
     def forward(
@@ -119,8 +124,9 @@ class TIGERDecoder(nn.Module):
         """
         _B, target_len, _D = target_embeddings.shape
 
-        # 获取因果遮罩
-        causal_mask = self.causal_mask[:target_len, :target_len]
+        # 获取因果遮罩 - 使用实际的decoder输入长度（target_embeddings已经包含了BOS）
+        actual_decoder_len = target_embeddings.shape[1]
+        causal_mask = self.causal_mask[:actual_decoder_len, :actual_decoder_len]
 
         # Decoder 处理
         decoder_output = self.decoder(
@@ -166,12 +172,14 @@ class TIGER(nn.Module):
         num_heads: int,  # attention head 数量
         ffn_hidden_extend: int,  # FFN 隐藏层扩展倍数
         dropout: float = 0.1,
+        sid_embedding: Optional[nn.Embedding] = None,  # Semantic ID embedding layer (for generation)
     ):
         super().__init__()
         self.max_sequence_len = max_sequence_len
         self.max_output_len = max_output_len
         self.vocab_size = vocab_size
         self.embedding_dim = embedding_dim
+        self.sid_embedding = sid_embedding  # Store for use in generate()
         
         # BOS token
         self.bos_emb = nn.Parameter(torch.rand(embedding_dim))
@@ -282,6 +290,104 @@ class TIGER(nn.Module):
         logits = self.output_projection(decoder_output)  # [Batch, Target_Len+1, Vocab_Size]
 
         return logits
+
+    @torch.inference_mode
+    def generate(
+        self,
+        user_emb: torch.Tensor,
+        post_sid_emb: torch.Tensor,
+        post_sid: torch.Tensor,
+        position_emb: torch.Tensor,
+        max_gen_len: int,
+        temperature: float = 1.0,
+        top_k: int = 50,
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """
+        自回归生成 Semantic IDs
+
+        Args:
+            user_emb: [B, 1, D] 用户 embedding
+            post_sid_emb: [B, N, D] 历史序列 embeddings
+            post_sid: [B, N] 历史序列 semantic IDs (用于 mask)
+            position_emb: [B, N, D] 位置 embeddings
+            max_gen_len: 最大生成长度
+            temperature: 采样温度
+            top_k: top-k 采样
+
+        Returns:
+            generated_ids: [B, max_gen_len] 生成的 semantic ID 序列
+            scores: [B] 生成的分数（可选，这里返回 None）
+        """
+        batch_size = user_emb.shape[0]
+        device = user_emb.device
+
+        # 1. 编码器前向传播 (只需要一次)
+        # 构建 Encoder 输入
+        input_embeddings = torch.cat([user_emb, post_sid_emb + position_emb], dim=1)
+        post_sid_padding_mask = post_sid == 0
+        encoder_padding_mask = torch.cat([
+            torch.zeros(batch_size, 1, dtype=torch.bool, device=device),
+            post_sid_padding_mask
+        ], dim=1)
+
+        encoder_output = self.encoder(
+            user_embeddings=self.in_proj(input_embeddings),
+            padding_mask=encoder_padding_mask,
+        )
+
+        # 2. 自回归生成
+        generated_ids = torch.zeros(batch_size, max_gen_len, dtype=torch.long, device=device)
+
+        # 初始化 decoder 输入：BOS token
+        current_input = self.bos_emb.view(1, 1, -1).expand(batch_size, 1, -1)  # [B, 1, D]
+        current_mask = torch.zeros(batch_size, 1, dtype=torch.bool, device=device)
+
+        for pos in range(max_gen_len):
+            # 解码器前向传播
+            decoder_output = self.decoder(
+                target_embeddings=current_input,
+                encoder_output=encoder_output,
+                target_padding_mask=current_mask,
+                memory_padding_mask=encoder_padding_mask,
+            )  # [B, current_len, D]
+
+            # 获取最后一个位置的输出
+            last_output = decoder_output[:, -1:, :]  # [B, 1, D]
+            logits = self.output_projection(last_output)  # [B, 1, Vocab]
+
+            # 应用温度和 top-k
+            if temperature != 1.0:
+                logits = logits / temperature
+
+            if top_k > 0:
+                # Top-k 过滤
+                v, _ = torch.topk(logits, top_k, dim=-1)
+                logits[logits < v[:, :, -1:]] = -float('inf')
+
+            # 采样
+            probs = F.softmax(logits, dim=-1)
+            next_id = torch.multinomial(probs[:, 0, :], num_samples=1)  # [B, 1]
+
+            # 记录生成的 token
+            generated_ids[:, pos] = next_id.squeeze(-1)
+
+            # 准备下一个时间步的输入
+            # 如果提供了 sid_embedding，使用它将 token ID 转换为 embedding
+            if self.sid_embedding is not None:
+                next_emb_raw = self.sid_embedding(next_id)  # [B, 1, sid_embedding_dim]
+                next_emb = self.in_proj(next_emb_raw)  # [B, 1, embedding_dim]
+            else:
+                # 回退方案：假设 next_id 已经是 embedding（不推荐，会失败）
+                # 这里保留是为了兼容性，但会在运行时报错
+                raise ValueError(
+                    "sid_embedding is required for generate(). "
+                    "Please provide it during TIGER initialization."
+                )
+
+            current_input = torch.cat([current_input, next_emb], dim=1)
+            current_mask = torch.cat([current_mask, torch.zeros(batch_size, 1, dtype=torch.bool, device=device)], dim=1)
+
+        return generated_ids, None
 
 
 def main():

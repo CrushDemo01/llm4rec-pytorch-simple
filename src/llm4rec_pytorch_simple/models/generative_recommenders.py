@@ -22,7 +22,6 @@ class GenerativeRecommenders(L.LightningModule):
     - 损失函数：losses
     - 指标：metrics
     """
-
     def __init__(
         self,
         embedding: DictConfig,
@@ -41,7 +40,6 @@ class GenerativeRecommenders(L.LightningModule):
         **kwargs,  # 接收并忽略配置文件中的下划线前缀参数 (如 _num_items, _max_sequence_len 等)
     ):
         super().__init__()
-        # 初始化优化器，支持配置对象或实例
         # 初始化优化器，支持配置对象或实例
         self.optimizer_cfg = optimizer
         self.scheduler_cfg = scheduler

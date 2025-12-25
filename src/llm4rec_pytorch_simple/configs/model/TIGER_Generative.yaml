@@ -1,0 +1,85 @@
+# TIGER Generative Recommender Configuration
+# Target module: TIGERRetrievalModule
+_target_: llm4rec_pytorch_simple.models.TIGERRetrievalModule.TIGERRetrievalModule
+
+# ==================== 基础配置 ====================
+gr_output_length: 3              # Semantic ID 长度（codebook 数量）
+item_embedding_dim: 64           # Item embedding 维度 (sid_embedding_dim)
+norm_type: "layer"               # 归一化类型
+torch_compile: False             # 是否使用 torch.compile
+
+# ==================== Negative Sampler ====================
+negative_sampler:
+  _target_: llm4rec_pytorch_simple.models.negative_samples.negative_samples.LocalNegativeSamples
+  num_items: ${data.num_items}
+
+# ==================== Sequence Model (TIGER) ====================
+sequence_model:
+  _target_: llm4rec_pytorch_simple.models.archs.TIGER
+  max_sequence_len: ${data.max_sequence_length}        # 输入序列最大长度
+  max_output_len: ${model.gr_output_length}            # 输出 Semantic ID 最大长度
+  vocab_size: 64                                       # Codebook size (根据 semantic_id_mapping 确定)
+  sid_embedding_dim: ${model.item_embedding_dim}       # Semantic ID embedding 维度
+  embedding_dim: 50                                   # TIGER 内部 embedding 维度
+  num_encoder_blocks: 1                                # Encoder block 数量
+  num_decoder_blocks: 1                                # Decoder block 数量
+  num_heads: 5                                         # Attention head 数量 (50 / 5 = 10)
+  ffn_hidden_extend: 4                                 # FFN 扩展倍数
+  dropout: 0.2
+
+# ==================== Loss Function ====================
+loss:
+  _target_: torch.nn.CrossEntropyLoss
+  ignore_index: 0                                      # 忽略 padding token
+
+# ==================== Metrics ====================
+metrics:
+  _target_: llm4rec_pytorch_simple.models.metrics.metrics.RetrievalMetrics
+  topk: 200
+  at_k_list: [10, 50, 100, 200]
+
+# ==================== Optimizer ====================
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 0.001
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  weight_decay: 0.01
+  amsgrad: false
+
+# ==================== Scheduler ====================
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  _partial_: true
+  T_max: 50
+  eta_min: 1.0e-5
+  last_epoch: -1
+
+# 学习率调度器监控的验证指标
+lr_monitor_metric: val/hr@10
+
+# ==================== TIGER 特有的子模块 ====================
+# Semantic ID Manager (item_id ↔ semantic_id 映射)
+semantic_id_manager:
+  _target_: llm4rec_pytorch_simple.models.semantic_id.semantic_id_tokenizer.SemanticIdTokenizer.from_pretrained
+  mapping_path: "${paths.root_dir}/ml-1m/multimodal_datasets/rqvae_results/semantic_id_mapping_tiger.pkl"
+
+# Semantic ID Embedding 层
+sid_embedding:
+  _target_: torch.nn.Embedding
+  num_embeddings: 64                                   # vocab_size (codebook_size)
+  embedding_dim: ${model.item_embedding_dim}           # sid_embedding_dim
+  padding_idx: 0
+
+# 用户 Embedding (可选，简化版使用零向量)
+user_embedding:
+  _target_: torch.nn.Embedding
+  num_embeddings: 6041                                 # 根据数据集确定用户数
+  embedding_dim: ${model.item_embedding_dim}           # 与 sid_embedding_dim 一致
+  padding_idx: 0
+
+# ==================== TIGER 特有配置参数 ====================
+codebook_size: 64                                      # Codebook 大小
+id_length: ${model.gr_output_length}                  # Semantic ID 长度
+pad_token_id: 0                                        # Padding token ID
