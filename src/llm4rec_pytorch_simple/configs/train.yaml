@@ -5,7 +5,7 @@
 defaults:
   - _self_
   - data: movielens
-  - model: TIGER_Generative
+  - model: RQVAE  # 使用 RQVAE 模型配置
   - callbacks: default
   - logger: wandb # set logger here or use command line (e.g. `python train.py logger=csv`)
   - trainer: gpu

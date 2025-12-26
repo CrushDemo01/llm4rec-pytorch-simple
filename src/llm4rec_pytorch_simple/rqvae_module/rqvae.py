@@ -29,8 +29,8 @@ class ResidualQuantizer(nn.Module):
         residual = z
         
         codes = []
-        commit_loss = 0.0
-        codebook_loss = 0.0
+        commit_loss = torch.tensor(0.0, device=z.device)
+        codebook_loss = torch.tensor(0.0, device=z.device)
         
         for i in range(self.num_codebooks):
             # 寻找最近邻

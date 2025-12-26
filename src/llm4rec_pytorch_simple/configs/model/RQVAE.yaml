@@ -1,0 +1,18 @@
+# configs/model/my_rqvae_config.yaml
+model:
+  text_path: "/home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/multimodal_datasets/embeddings_50d/text_embeddings_50d.parquet"
+  image_path: "/home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/multimodal_datasets/embeddings_50d/image_embeddings_50d.parquet"
+  mapping_path: "/home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/processed/movie_id_mapping.json"
+  mode: "concat"
+  save_dir: "/home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/multimodal_datasets/rqvae_results"
+  
+  batch_size: 64
+  hidden_dim: [512, 256]
+  code_dim: 50
+  num_codebooks: 3
+  codebook_size: 32
+  
+  beta: 0.1
+  lr: 5e-4
+  min_lr: 1e-5
+  epochs: 400

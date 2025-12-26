@@ -1,0 +1,121 @@
+task_name: train
+tags:
+- dev
+train: true
+test: true
+ckpt_path: null
+seed: null
+data:
+  _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataModule
+  max_hash_ranges:
+    genres: 63
+    title: 16383
+    year: 511
+  data_path: ${paths.data_dir}
+  max_jagged_dimension: 16
+  max_sequence_length: 200
+  num_items: 3883
+  batch_size: 32
+  sample_ratio: 1.0
+  num_workers: 4
+  prefetch_factor: 4
+  persistent_workers: true
+  split_mode: user_id
+  train_dataset:
+    _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataset
+    ratings_file: ${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_train_data.csv
+    ignore_last_n: 0
+  val_dataset:
+    _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataset
+    ratings_file: ${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_test_data.csv
+    ignore_last_n: 0
+  test_dataset:
+    _target_: llm4rec_pytorch_simple.data.rec_dataset.RecoDataset
+    ratings_file: ${paths.root_dir}/ml-1m/processed/sasrec_format_${data.split_mode}_test_data.csv
+    ignore_last_n: 0
+model:
+  text_path: /home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/multimodal_datasets/embeddings_32d/text_embeddings_32d.parquet
+  image_path: /home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/multimodal_datasets/embeddings_32d/image_embeddings_32d.parquet
+  mapping_path: /home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/processed/movie_id_mapping.json
+  mode: text
+  save_dir: /home/disk1/ywb/REC/llm4rec-pytorch-simple/checkpoints/rqvae_text
+  batch_size: 256
+  hidden_dim:
+  - 512
+  - 256
+  code_dim: 64
+  num_codebooks: 4
+  codebook_size: 128
+  beta: 0.5
+  lr: 0.0005
+  min_lr: 1.0e-05
+  epochs: 5
+callbacks:
+  model_checkpoint:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    dirpath: ${paths.output_dir}/checkpoints
+    filename: epoch_{epoch:03d}
+    monitor: val/hr@10
+    verbose: false
+    save_last: true
+    save_top_k: 1
+    mode: max
+    auto_insert_metric_name: false
+    save_weights_only: false
+    every_n_train_steps: null
+    train_time_interval: null
+    every_n_epochs: null
+    save_on_train_epoch_end: null
+  early_stopping:
+    _target_: lightning.pytorch.callbacks.EarlyStopping
+    monitor: val/hr@10
+    min_delta: 0.0
+    patience: 100
+    verbose: false
+    mode: max
+    strict: true
+    check_finite: true
+    stopping_threshold: null
+    divergence_threshold: null
+    check_on_train_epoch_end: null
+  model_summary:
+    _target_: lightning.pytorch.callbacks.RichModelSummary
+    max_depth: -1
+  rich_progress_bar:
+    _target_: llm4rec_pytorch_simple.utils.rich_utils.CustomRichProgressBar
+  learning_rate_monitor:
+    _target_: lightning.pytorch.callbacks.LearningRateMonitor
+    logging_interval: step
+logger:
+  wandb:
+    _target_: lightning.pytorch.loggers.wandb.WandbLogger
+    name: null
+    save_dir: ${paths.output_dir}
+    offline: false
+    id: null
+    anonymous: null
+    project: llm4rec-pytorch-simple
+    log_model: true
+    prefix: ''
+    group: ${model._target_}
+    tags: ${tags}
+    job_type: train
+trainer:
+  _target_: lightning.pytorch.trainer.Trainer
+  default_root_dir: ${paths.output_dir}
+  min_epochs: 1
+  max_epochs: 1000
+  accelerator: gpu
+  devices: 1
+  check_val_every_n_epoch: 1
+  deterministic: false
+paths:
+  root_dir: .
+  data_dir: ${paths.root_dir}/ml-1m/data
+  log_dir: ${paths.root_dir}/logs/
+  output_dir: ${hydra:runtime.output_dir}
+  work_dir: ${hydra:runtime.cwd}
+extras:
+  ignore_warnings: false
+  enforce_tags: true
+  print_config: true

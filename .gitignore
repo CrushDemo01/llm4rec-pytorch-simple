@@ -1,5 +1,6 @@
 *.ckpt
 *.pth
+*.pt
 
 docs/source
 # multimodal_datasets/

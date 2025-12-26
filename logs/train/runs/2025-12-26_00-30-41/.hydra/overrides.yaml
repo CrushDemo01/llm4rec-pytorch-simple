@@ -1,0 +1,6 @@
+- model.text_path=/home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/multimodal_datasets/embeddings_32d/text_embeddings_32d.parquet
+- model.image_path=/home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/multimodal_datasets/embeddings_32d/image_embeddings_32d.parquet
+- model.mapping_path=/home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/processed/movie_id_mapping.json
+- model.mode=text
+- model.save_dir=/home/disk1/ywb/REC/llm4rec-pytorch-simple/checkpoints/rqvae_text
+- model.epochs=5
