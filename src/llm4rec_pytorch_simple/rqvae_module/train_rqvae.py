@@ -107,7 +107,6 @@ def build_semantic_id_mapping(
         - semantic_ids_to_item_id: {tuple(semantic_ids): item_id}
         - movie_id_to_semantic_ids: {movie_id: tuple(semantic_ids)}
         - num_codebooks: codebook 数量
-        - vocab_size: 最大 code 值 + 1
     """
     logger.info(f"从 {mapping_path} 加载 movie_id 映射...")
     mapping_data = json.load(open(mapping_path, 'r'))
@@ -173,15 +172,14 @@ def build_semantic_id_mapping(
             'semantic_id': str(codes_tuple_with_idx)
         })
 
-    # 计算 vocab_size（最大消歧索引可能大于最大 code 值）
-    max_conflict_idx = max(sid_conflict.values()) - 1
-    vocab_size = max(max_code_value, max_conflict_idx) + 1
+    # 唯一的原始 sid 数量（不含消歧索引）
+    unique_sid_count = len(sid_conflict)
 
     logger.info(f"映射表构建完成:")
     logger.info(f"  - 物品总数: {len(item_id_to_semantic_ids)}")
+    logger.info(f"  - 唯一SID数量: {unique_sid_count}")
     logger.info(f"  - 冲突物品数: {conflict_count}")
     logger.info(f"  - 语义ID长度: {num_codebooks + 1}")
-    logger.info(f"  - Vocab 大小: {vocab_size}")
 
     return {
         'item_id_to_semantic_ids': item_id_to_semantic_ids,
@@ -189,7 +187,7 @@ def build_semantic_id_mapping(
         'movie_id_to_semantic_ids': movie_id_to_semantic_ids,
         'semantic_ids_to_movie_id': semantic_ids_to_movie_id,  # 新增反向映射
         'num_codebooks': num_codebooks,
-        'vocab_size': vocab_size,
+        'unique_sid_count': unique_sid_count,
         'mapping_table_df': pd.DataFrame(mapping_table_list)
     }
 
@@ -221,6 +219,11 @@ def train(cfg):
     epochs = cfg.model.epochs
     val_ratio = cfg.model.get('val_ratio', 0.1)  # 验证集比例，默认10%
     early_stopping_patience = cfg.model.get('early_stopping_patience', 50)  # 早停耐心值
+    normalize_input = cfg.model.get('normalize_input', False)  # 是否归一化输入
+    beta_schedule = cfg.model.get('beta_schedule', 'constant')  # beta调度策略
+    beta_warmup_epochs = cfg.model.get('beta_warmup_epochs', 50)  # beta warmup的epoch数
+    recon_weight = cfg.model.get('recon_weight', 1.0)  # 重建损失权重
+    codebook_weight = cfg.model.get('codebook_weight', 1.0)  # codebook损失权重
 
     # 加载数据
     dataset = EmbeddingLoader(
@@ -250,6 +253,23 @@ def train(cfg):
     input_dim = sample_embedding.shape[0]
     logger.info(f"Input dimension: {input_dim}")
 
+    # 计算归一化参数（如果需要）
+    if normalize_input:
+        logger.info("计算数据归一化参数...")
+        all_embeddings = []
+        temp_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        for batch in temp_loader:
+            _, x = batch
+            all_embeddings.append(x)
+        all_embeddings = torch.cat(all_embeddings, dim=0)
+        data_mean = all_embeddings.mean(dim=0)
+        data_std = all_embeddings.std(dim=0) + 1e-8  # 避免除零
+        logger.info(f"数据均值范围: [{data_mean.min():.4f}, {data_mean.max():.4f}]")
+        logger.info(f"数据标准差范围: [{data_std.min():.4f}, {data_std.max():.4f}]")
+    else:
+        data_mean = None
+        data_std = None
+
     # 初始化模型
     model = RQVAE(
         input_dim=input_dim,
@@ -274,7 +294,8 @@ def train(cfg):
     best_val_loss = float('inf')
     patience_counter = 0
     best_epoch = 0
-    
+    first_batch = True  # 标记是否是第一个batch
+
     for epoch in range(epochs):
         # ===== 训练阶段 =====
         model.train()
@@ -283,17 +304,44 @@ def train(cfg):
         train_commit_loss = 0
         train_codebook_loss = 0
 
-        for batch in train_loader:
+        for batch_idx, batch in enumerate(train_loader):
             movie_ids, x = batch
             x = x.to(device)
+
+            # 归一化输入
+            if normalize_input:
+                x = (x - data_mean.to(device)) / data_std.to(device)
+
+            # 在第一个batch时使用k-means初始化码本
+            if epoch > 0 and first_batch:
+                logger.info("使用k-means初始化码本...")
+                z = model.encoder(x)
+                model.quantizer.initialize_codebooks_kmeans(z, max_iters=50)
+                logger.info("码本初始化完成")
+                first_batch = False
 
             optimizer.zero_grad()
             codes, x_recon, commit_loss, codebook_loss = model(x)
             recon_loss = F.mse_loss(x_recon, x)
-            current_beta = beta + (epoch / epochs) * beta  # 从 beta 线性增加到 2*beta
+
+            # Beta调度策略
+            if beta_schedule == 'warmup':
+                # 前beta_warmup_epochs个epoch从0线性增加到beta
+                if epoch < beta_warmup_epochs:
+                    current_beta = beta * (epoch / beta_warmup_epochs)
+                else:
+                    current_beta = beta
+            else:
+                # 原始策略：从beta线性增加到2*beta
+                current_beta = beta + (epoch / epochs) * beta
+
+            # 总损失 = recon_weight * 重构损失 + beta * 承诺损失 + codebook_weight * 码本损失
+            recon_loss *= recon_weight
             commit_loss *= current_beta
-            # 总损失 = 重构损失 + beta * 承诺损失 + 码本损失
+            codebook_loss *= codebook_weight
+            
             loss = recon_loss + commit_loss + codebook_loss
+            
             loss.backward()
             optimizer.step()
 
@@ -318,9 +366,14 @@ def train(cfg):
             for batch in val_loader:
                 movie_ids, x = batch
                 x = x.to(device)
+
+                # 归一化输入
+                if normalize_input:
+                    x = (x - data_mean.to(device)) / data_std.to(device)
+
                 codes, x_recon, commit_loss, codebook_loss = model(x)
                 recon_loss = F.mse_loss(x_recon, x)
-                loss = recon_loss + commit_loss + codebook_loss
+                loss = recon_weight * recon_loss + commit_loss + codebook_weight * codebook_loss
                 
                 val_loss += loss.item()
                 val_recon_loss += recon_loss.item()
@@ -361,12 +414,36 @@ def train(cfg):
     logger.info(f"\n训练完成!")
     logger.info(f"最佳验证损失: {best_val_loss:.6f} (Epoch {best_epoch})")
 
-    # 加载最佳模型进行最终保存
+    # ===== 先用最后一轮模型生成 codes 并统计 =====
+    logger.info("\n===== 最后一轮模型统计 =====")
+    model.eval()
+    last_epoch_codes_list = []
+    with torch.no_grad():
+        eval_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        for batch in eval_loader:
+            movie_ids, x = batch
+            x = x.to(device)
+            if normalize_input:
+                x = (x - data_mean.to(device)) / data_std.to(device)
+            codes, x_recon, commit_loss, codebook_loss = model(x)
+            last_epoch_codes_list.append(codes.cpu())
+
+    last_epoch_codes = torch.cat(last_epoch_codes_list, dim=0).numpy()
+    code_cols = [f"code_{i}" for i in range(num_codebooks)]
+    df_last_codes = pd.DataFrame(last_epoch_codes, columns=code_cols)
+    df_last_codes['movie_id'] = dataset.idx_to_movie_id_list
+    df_last_codes = df_last_codes[['movie_id'] + code_cols]
+
+    # 统计最后一轮的冲突情况
+    last_mapping = build_semantic_id_mapping(codes_df=df_last_codes, mapping_path=mapping_path)
+
+    # ===== 加载最佳模型 =====
+    logger.info("\n===== 最佳模型统计 =====")
     if best_epoch > 0:
         model.load_state_dict(torch.load(best_model_path))
         logger.info(f"已加载最佳模型 (Epoch {best_epoch})")
 
-    # 保存最终模型
+    # 保存最终模型（最佳模型）
     os.makedirs(save_dir, exist_ok=True)
     final_model_path = os.path.join(save_dir, f"rqvae_{mode}_final.pth")
     torch.save(model.state_dict(), final_model_path)
@@ -380,6 +457,11 @@ def train(cfg):
         for batch in eval_loader:
             movie_ids, x = batch
             x = x.to(device)
+
+            # 归一化输入
+            if normalize_input:
+                x = (x - data_mean.to(device)) / data_std.to(device)
+
             codes, x_recon, commit_loss, codebook_loss = model(x)
             all_codes_list.append(codes.cpu())
 

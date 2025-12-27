@@ -10,9 +10,111 @@ class ResidualQuantizer(nn.Module):
         self.codebook_size = codebook_size
         self.code_dim = code_dim
         self.distance_mode = distance_mode
-        
+        self.initialized = False  # 标记是否已初始化
+
         # 码本: (D, K, C)   torch.Size([2, 64, 32])
+        # 初始化为随机值，后续会用k-means重新初始化
         self.codebooks = nn.Parameter(torch.randn(num_codebooks, codebook_size, code_dim))
+
+    def initialize_codebooks_kmeans(self, z: torch.Tensor, max_iters: int = 100):
+        """
+        使用k-means聚类初始化码本，防止码本坍塌
+
+        参数:
+            z: 第一个batch的编码器输出 (batch_size, code_dim)
+            max_iters: k-means最大迭代次数
+        """
+        if self.initialized:
+            return
+
+        with torch.no_grad():
+            residual = z.clone()
+
+            for i in range(self.num_codebooks):
+                # 对当前残差进行k-means聚类
+                centroids = self._kmeans(residual, self.codebook_size, max_iters)
+
+                # 用聚类中心初始化码本
+                self.codebooks.data[i] = centroids
+
+                # 计算量化值并更新残差（为下一个码本准备）
+                if self.distance_mode.lower() == 'l2':
+                    dists = (
+                        torch.sum(residual**2, dim=1, keepdim=True) +
+                        torch.sum(centroids**2, dim=1) -
+                        2 * torch.matmul(residual, centroids.t())
+                    )
+                elif self.distance_mode.lower() == 'cos':
+                    residual_norm = F.normalize(residual, p=2, dim=1)
+                    centroids_norm = F.normalize(centroids, p=2, dim=1)
+                    dists = - torch.matmul(residual_norm, centroids_norm.t())
+                else:
+                    raise ValueError(f"Unsupported distance mode: {self.distance_mode}")
+
+                indices = torch.argmin(dists, dim=1)
+                z_q_i = centroids[indices]
+                residual = residual - z_q_i
+
+        self.initialized = True
+
+    def _kmeans(self, x: torch.Tensor, k: int, max_iters: int = 100) -> torch.Tensor:
+        """
+        简单的k-means聚类实现
+
+        参数:
+            x: 输入数据 (n_samples, n_features)
+            k: 聚类数量
+            max_iters: 最大迭代次数
+
+        返回:
+            centroids: 聚类中心 (k, n_features)
+        """
+        n_samples = x.shape[0]
+
+        # 如果样本数少于k，使用重复采样
+        if n_samples < k:
+            indices = torch.randint(0, n_samples, (k,), device=x.device)
+            centroids = x[indices]
+        else:
+            # 随机选择k个样本作为初始中心
+            indices = torch.randperm(n_samples, device=x.device)[:k]
+            centroids = x[indices]
+
+        for _ in range(max_iters):
+            # 计算每个样本到各中心的距离
+            if self.distance_mode.lower() == 'l2':
+                dists = (
+                    torch.sum(x**2, dim=1, keepdim=True) +
+                    torch.sum(centroids**2, dim=1) -
+                    2 * torch.matmul(x, centroids.t())
+                )
+            elif self.distance_mode.lower() == 'cos':
+                x_norm = F.normalize(x, p=2, dim=1)
+                centroids_norm = F.normalize(centroids, p=2, dim=1)
+                dists = - torch.matmul(x_norm, centroids_norm.t())
+            else:
+                raise ValueError(f"Unsupported distance mode: {self.distance_mode}")
+
+            # 分配样本到最近的中心
+            labels = torch.argmin(dists, dim=1)
+
+            # 更新中心
+            new_centroids = torch.zeros_like(centroids)
+            for j in range(k):
+                mask = labels == j
+                if mask.sum() > 0:
+                    new_centroids[j] = x[mask].mean(dim=0)
+                else:
+                    # 如果某个中心没有分配到样本，保持不变或随机重新初始化
+                    new_centroids[j] = centroids[j]
+
+            # 检查收敛
+            if torch.allclose(centroids, new_centroids, atol=1e-6):
+                break
+
+            centroids = new_centroids
+
+        return centroids
 
     def forward(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -142,6 +244,19 @@ class RQVAE(nn.Module):
                 decoder_layers.append(nn.GELU())
                 decoder_layers.append(nn.Dropout(dropout))
         self.decoder = nn.Sequential(*decoder_layers)
+
+        # 初始化模型参数
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        """初始化模型参数"""
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """

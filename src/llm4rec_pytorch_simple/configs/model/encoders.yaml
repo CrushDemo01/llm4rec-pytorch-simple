@@ -3,17 +3,18 @@
 
 model:
   # 数据路径
-  data_dir: "/home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/multimodal_datasets"
-  text_csv: "text.csv"
+  data_dir: "ml-1m/multimodal_datasets"
+  text_csv: "movies_with_descriptions.csv"
   image_dir: "image"
-  output_dir: "embeddings_50d"
 
   # 模型参数
-  output_dim: 50  # PCA 降维目标维度
+  output_dim: 256  # PCA 降维目标维度
   text_model_name: "bert-base-uncased"  # BERT 模型名称
 
+  output_dir: "embedding_dim${.output_dim}"
+
   # 训练参数
-  text_batch_size: 16  # 文本编码批次大小
+  text_batch_size: 64  # 文本编码批次大小
   image_batch_size: 64  # 图像编码批次大小
 
   # 设备配置

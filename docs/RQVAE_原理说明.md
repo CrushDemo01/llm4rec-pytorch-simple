@@ -128,3 +128,225 @@ z_q = z + (z_q - z).detach()
     * `recon_loss`: 重构损失 (`MSE(x_recon, x)`)，保证重构质量。
     * `commit_loss`: 量化器的承诺损失，保证编码器输出适合量化。
     * `beta`: 权重系数，平衡两项损失。
+
+
+
+# 码本坍塌
+遇到了很严重的码本坍塌问题，尝试各种超参调整和技巧（如增加 beta，使用 warmup 策略等），但效果仍不理想。
+
+```
+[2025-12-27 14:37:06,591][__main__][INFO] - 映射表构建完成:
+[2025-12-27 14:37:06,591][__main__][INFO] -   - 物品总数: 3882
+[2025-12-27 14:37:06,591][__main__][INFO] -   - 冲突物品数: 3881
+[2025-12-27 14:37:06,591][__main__][INFO] -   - 语义ID长度: 4
+[2025-12-27 14:37:06,591][__main__][INFO] -   - Vocab 大小: 3882
+```
+
+## 原文改进
+
+> As proposed in [40], to prevent RQ-VAE from a codebook collapse, where most of the input gets mapped to only a few codebook vectors, we use k-means clustering-based initialization for the codebook. Specifically, we apply the k-means algorithm on the first training batch and use the centroids as initialization.
+
+主要改进
+
+  1. K-means码本初始化 (src/llm4rec_pytorch_simple/rqvae_module/rqvae.py:19-117)
+
+  - 实现了initialize_codebooks_kmeans()方法，在第一个训练batch时用k-means聚类初始化码本
+  - 这可以防止码本坍塌（codebook collapse）问题，确保码本向量分布在数据空间中
+  - 对每个codebook依次进行k-means，基于残差进行聚类
+
+  2. 优化模型架构 (RQVAE.yaml:10-14)
+
+  - hidden_dim: [256, 128] → [384, 256] - 更平滑的维度过渡（512→384→256→128），减少信息瓶颈
+  - code_dim: 64 → 128 - 增加编码维度，保留更多信息
+  - codebook_size: 32 → 64 - 增加码本大小，提供更强表达能力（64³=262144 >> 3883个电影）
+  - batch_size: 512 → 256 - 减小batch size，提高梯度更新频率
+
+  3. 优化训练策略 (RQVAE.yaml:16-21)
+
+  - beta: 0.15 → 0.05 - 大幅降低量化损失权重，让模型先专注于学习重建
+  - beta_warmup_epochs: 30 → 100 - 延长warmup期，前100个epoch量化约束从0逐渐增加到0.05
+  - lr: 3e-4 → 1e-3 - 提高学习率，加快收敛
+
+  为什么这些改进有效？
+
+  1. K-means初始化：确保码本向量从一开始就分布在真实数据空间中，避免随机初始化导致的码本坍塌
+  2. 更大的code_dim和codebook_size：提供足够的表达能力来重建512维输入
+  3. 更长的beta warmup：让模型在前100个epoch专注学习重建（beta从0增长），之后再逐渐引入量化约束
+  4. 更平滑的维度过渡：避免信息在编码器中损失过快
+
+```
+[2025-12-27 14:46:40,439][__main__][INFO] - 映射表构建完成:
+[2025-12-27 14:46:40,439][__main__][INFO] -   - 物品总数: 3882
+[2025-12-27 14:46:40,439][__main__][INFO] -   - 冲突物品数: 3335
+[2025-12-27 14:46:40,439][__main__][INFO] -   - 语义ID长度: 4
+[2025-12-27 14:46:40,439][__main__][INFO] -   - Vocab 大小: 236
+```
+
+---
+
+## 进一步改进 (2025-12-27)
+
+在上述改进基础上，进行了更多优化，最终将冲突物品数从 3335 降低到约 500 左右。
+
+### 1. 模型架构改进
+
+#### 1.1 模型参数初始化 (`rqvae.py`)
+
+新增 `_init_weights` 方法，对模型参数进行规范初始化：
+
+```python
+def _init_weights(self, module):
+    """初始化模型参数"""
+    if isinstance(module, nn.Linear):
+        module.weight.data.normal_(mean=0.0, std=0.02)
+        if module.bias is not None:
+            module.bias.data.zero_()
+    elif isinstance(module, nn.LayerNorm):
+        module.bias.data.zero_()
+        module.weight.data.fill_(1.0)
+```
+
+- Linear 层：权重使用均值 0、标准差 0.02 的正态分布
+- LayerNorm 层：权重初始化为 1，偏置初始化为 0
+
+#### 1.2 K-means 码本初始化时机优化 (`train_rqvae.py`)
+
+原来的实现是在第一个 batch（epoch=0）时进行 K-means 初始化，但此时 encoder 还未经过任何训练，输出的 latent 向量质量较差。
+
+**改进**：将 K-means 初始化延迟到 epoch=1 的第一个 batch：
+
+```python
+# 在第一个batch时使用k-means初始化码本
+if epoch > 0 and first_batch:
+    logger.info("使用k-means初始化码本...")
+    z = model.encoder(x)
+    model.quantizer.initialize_codebooks_kmeans(z, max_iters=50)
+    logger.info("码本初始化完成")
+    first_batch = False
+```
+
+**为什么这样更好**：
+- epoch=0 时 encoder 随机初始化，输出的 latent 向量分布不合理
+- 经过 epoch=0 的训练后，encoder 已经学到了一些有意义的表示
+- 此时再用 K-means 初始化码本，聚类中心更能反映真实数据分布
+
+### 2. 训练策略改进
+
+#### 2.1 新增可配置的 Loss 权重 (`RQVAE.yaml` & `train_rqvae.py`)
+
+```yaml
+# Loss 权重
+recon_weight: 1.0   # 重建损失权重
+codebook_weight: 1.0  # codebook损失权重
+```
+
+总损失计算公式：
+```
+loss = recon_weight * recon_loss + current_beta * commit_loss + codebook_weight * codebook_loss
+```
+
+这允许独立调整三个损失项的相对重要性。
+
+#### 2.2 Beta Warmup 策略优化
+
+```yaml
+beta: 0.25
+beta_schedule: "warmup"
+beta_warmup_epochs: 50
+```
+
+- `warmup` 策略：前 N 个 epoch，beta 从 0 线性增加到目标值
+- 让模型先专注于学习重建，再逐渐引入量化约束
+
+#### 2.3 可选的输入归一化
+
+```yaml
+normalize_input: false  # 可选：对输入进行归一化
+```
+
+> ⚠️这个千万不要做 norm，norm 很 sb
+
+### 3. 统计与监控改进
+
+#### 3.1 唯一 SID 数量统计
+
+移除了无意义的 `vocab_size` 计算，新增 `unique_sid_count` 统计：
+
+```python
+unique_sid_count = len(sid_conflict)  # 唯一的原始 code 组合数量
+```
+
+输出示例：
+```
+映射表构建完成:
+  - 物品总数: 3883
+  - 唯一SID数量: 3359
+  - 冲突物品数: 524
+  - 语义ID长度: 4
+```
+
+#### 3.2 最后一轮 vs 最佳模型对比
+
+训练结束后同时输出两组统计，方便对比：
+
+```
+===== 最后一轮模型统计 =====
+  - 唯一SID数量: xxxx
+  - 冲突物品数: xxx
+
+===== 最佳模型统计 =====
+已加载最佳模型 (Epoch xxx)
+  - 唯一SID数量: xxxx
+  - 冲突物品数: xxx
+```
+
+### 4. 最终配置参数
+
+```yaml
+model:
+  batch_size: 512
+  hidden_dim: [256, 128]
+  code_dim: 32
+  num_codebooks: 3
+  codebook_size: 64  # 64^3 = 262144 >> 3883
+
+  beta: 0.25
+  beta_schedule: "warmup"
+  beta_warmup_epochs: 50
+
+  recon_weight: 1.0
+  codebook_weight: 1.0
+  lr: 1e-3
+  min_lr: 1e-4
+  epochs: 200
+
+  val_ratio: 0.1
+  normalize_input: false
+```
+
+### 5. 最终效果
+
+```
+[2025-12-27 16:32:59,361][__main__][INFO] - 映射表构建完成:
+[2025-12-27 16:32:59,361][__main__][INFO] -   - 物品总数: 3883
+[2025-12-27 16:32:59,361][__main__][INFO] -   - 唯一SID数量: 3359
+[2025-12-27 16:32:59,361][__main__][INFO] -   - 冲突物品数: 524
+[2025-12-27 16:32:59,361][__main__][INFO] -   - 语义ID长度: 4
+```
+
+**改进效果对比**：
+
+| 版本 | 冲突物品数 | 唯一SID数量 | 冲突率 |
+|------|-----------|------------|--------|
+| 初始版本 | 3881 | 1 | 99.97% |
+| K-means初始化后 | 3335 | ~500 | 85.9% |
+| **最终优化版** | **524** | **3359** | **13.5%** |
+
+### 6. 关键改进总结
+
+1. **模型参数初始化**：规范的权重初始化有助于训练稳定性
+2. **K-means 码本初始化时机优化**: 第一个 epoch 后做k-means，利用更好的 latent 分布,效果明显
+2. **Loss 权重可配置**：允许灵活调整重建、承诺、码本三个损失的平衡
+3. **Beta Warmup**：先学重建再学量化，避免早期量化约束过强
+4. **统计监控**：唯一 SID 数量和最后一轮/最佳模型对比，便于调参
+5. **codebook_size=64**：提供足够的表达能力（64³=262144 >> 3883），这个值越大，效果越好。（整体码本的表达能力越大，效果越好）

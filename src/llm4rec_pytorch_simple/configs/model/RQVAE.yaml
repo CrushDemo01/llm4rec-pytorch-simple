@@ -1,18 +1,35 @@
 # configs/model/my_rqvae_config.yaml
 model:
-  text_path: "/home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/multimodal_datasets/embeddings_50d/text_embeddings_50d.parquet"
-  image_path: "/home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/multimodal_datasets/embeddings_50d/image_embeddings_50d.parquet"
-  mapping_path: "/home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/processed/movie_id_mapping.json"
-  mode: "concat"
-  save_dir: "/home/disk1/ywb/REC/llm4rec-pytorch-simple/ml-1m/multimodal_datasets/rqvae_results"
-  
-  batch_size: 64
-  hidden_dim: [512, 256]
-  code_dim: 50
-  num_codebooks: 3
-  codebook_size: 32
-  
-  beta: 0.1
-  lr: 5e-4
-  min_lr: 1e-5
+  embedding_root: "ml-1m/multimodal_datasets/embedding_dim256"
+  text_path: "${.embedding_root}/text_embeddings.parquet"
+  image_path: "${.embedding_root}/image_embeddings.parquet"
+  mapping_path: "ml-1m/processed/movie_id_mapping.json"
+  mode: "text_img"
+  save_dir: "ml-1m/multimodal_datasets/rqvae_${.mode}_results"
+
+  batch_size: 512  # 减小batch size，提高梯度更新频率
+  hidden_dim: [256, 128]  # 更平滑的维度过渡
+  code_dim: 32  # 原文 32
+  num_codebooks: 3  # 3个codebook，64^3=262144 >> 3883
+  codebook_size: 64  # 增加到64，提供更多表达能力
+  dropout: 0.2  # 适度dropout防止过拟合
+
+  beta: 0.25  # 降低beta值，先专注于重建
+  beta_schedule: "warmup"  # 使用warmup策略
+  beta_warmup_epochs: 50  # 延长warmup到100个epoch，让模型先学好重建
+
+  # Loss 权重
+  recon_weight: 1  # 重建损失权重
+  codebook_weight: 1.0  # codebook损失权重
+  lr: 1e-3  # 提高学习率
+  min_lr: 1e-4
   epochs: 400
+
+  # 验证和早停
+  val_ratio: 0.1
+  early_stopping_patience: 999999  # 禁用早停
+
+  # 数据归一化
+  normalize_input: false  # 对输入进行归一化
+
+  device: "cuda"  # 可选: "cuda", "mps", "cpu"

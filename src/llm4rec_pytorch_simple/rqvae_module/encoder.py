@@ -275,7 +275,7 @@ def extract_text_features(
     explained_var = encoder.pca.explained_variance_[:5].cpu().numpy()
     print(f"  - 解释方差 (前5个): {explained_var}")
 
-    movie_ids = df['MovieID'].values
+    movie_ids = df['movieid'].values
     return embeddings, movie_ids
 
 
@@ -417,13 +417,13 @@ def main(cfg: DictConfig) -> None:
     text_embeddings, text_movie_ids = extract_text_features(
         encoder=text_encoder,
         df=df_text,
-        text_column='description',
+        text_column='text',
         batch_size=text_batch_size,
         device=device
     )
 
     # 保存文本嵌入
-    text_output_path = output_dir / f"text_embeddings_{output_dim}d.parquet"
+    text_output_path = output_dir / f"text_embeddings.parquet"
     save_embeddings(text_embeddings, text_movie_ids, text_output_path, output_dim)
 
     # ==================== 图像编码 ====================
@@ -444,7 +444,7 @@ def main(cfg: DictConfig) -> None:
     )
 
     # 保存图像嵌入
-    image_output_path = output_dir / f"image_embeddings_{output_dim}d.parquet"
+    image_output_path = output_dir / f"image_embeddings.parquet"
     save_embeddings(image_embeddings, image_movie_ids, image_output_path, output_dim)
 
     # ==================== 保存模型 ====================
